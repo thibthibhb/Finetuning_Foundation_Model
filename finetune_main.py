@@ -3,34 +3,50 @@ import random
 
 import numpy as np
 import torch
-
+import os
 from datasets import faced_dataset, seedv_dataset, physio_dataset, shu_dataset, isruc_dataset, chb_dataset, \
-    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset
+    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset, orp_dataset
 from finetune_trainer import Trainer
 from models import model_for_faced, model_for_seedv, model_for_physio, model_for_shu, model_for_isruc, model_for_chb, \
     model_for_speech, model_for_mumtaz, model_for_seedvig, model_for_stress, model_for_tuev, model_for_tuab, \
-    model_for_bciciv2a
-
-
+    model_for_bciciv2a, model_for_takeda_idun
+import pdb
+      
 def main():
     parser = argparse.ArgumentParser(description='Big model downstream')
+    
+    # Foundation model architecture info (for scaling plots)
+    parser.add_argument('--model_name', type=str, default='EEG-Foundation-v1')
+    parser.add_argument('--model_size', type=int, default=4000000)  # total params
+    parser.add_argument('--layers', type=int, default=12)
+    parser.add_argument('--heads', type=int, default=8)
+    parser.add_argument('--embedding_dim', type=int, default=512)
+
+    # Data-related info
+    parser.add_argument('--data_fraction', type=float, default=1.0, help='Fraction of training data used')
+    parser.add_argument('--num_subjects', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
+
+    # Experiment tracking
+    parser.add_argument('--baseline', action='store_true', help='Is this a non-foundation baseline model?')
+    parser.add_argument('--comment', type=str, default='', help='Optional note for logging')
+
     parser.add_argument('--seed', type=int, default=3407, help='random seed (default: 0)')
     parser.add_argument('--cuda', type=int, default=0, help='cuda number (default: 1)')
-    parser.add_argument('--epochs', type=int, default=50, help='number of epochs (default: 5)')
+    parser.add_argument('--epochs', type=int, default=20, help='number of epochs (default: 5)')
     parser.add_argument('--batch_size', type=int, default=64, help='batch size for training (default: 32)')
     parser.add_argument('--lr', type=float, default=5e-4, help='learning rate (default: 1e-3)')
-    parser.add_argument('--weight_decay', type=float, default=5e-2, help='weight decay (default: 1e-2)')
+    parser.add_argument('--weight_decay', type=float, default=0, help='weight decay (default: 1e-2)') #5e-2
     parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer (AdamW, SGD)')
     parser.add_argument('--clip_value', type=float, default=1, help='clip_value')
-    parser.add_argument('--dropout', type=float, default=0.1, help='dropout')
-
+    parser.add_argument('--dropout', type=float, default=0.0, help='dropout') # 0.1
+    parser.add_argument('--sample_rate', type=float, default=30, help='sample_rate') # 30
     """############ Downstream dataset settings ############"""
     parser.add_argument('--downstream_dataset', type=str, default='FACED',
                         help='[FACED, SEED-V, PhysioNet-MI, SHU-MI, ISRUC, CHB-MIT, BCIC2020-3, Mumtaz2016, SEED-VIG, MentalArithmetic, TUEV, TUAB, BCIC-IV-2a]')
     parser.add_argument('--datasets_dir', type=str,
                         default='/data/datasets/BigDownstream/Faced/processed',
                         help='datasets_dir')
-    parser.add_argument('--num_of_classes', type=int, default=9, help='number of classes')
+    parser.add_argument('--num_of_classes', type=int, default=4, help='number of classes')
     parser.add_argument('--model_dir', type=str, default='/data/wjq/models_weights/Big/BigFACED', help='model_dir')
     """############ Downstream dataset settings ############"""
 
@@ -46,12 +62,31 @@ def main():
                         # default='/data/wjq/models_weights/Big/0.4/epoch40_loss0.001386052928864956.pth',
                         default='pretrained_weights/pretrained_weights.pth',
                         help='foundation_dir')
+    # ADD BY THIBAUT
+    parser.add_argument('--weight_class', type=str, default=None,
+                    help='Path to the .npy file of class weights (optional)')
+    parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
 
     params = parser.parse_args()
+    
+    # ✅ Load class weights if provided
+    if params.weight_class is not None and os.path.exists(params.weight_class + ".npy"):
+        weights_array = np.load(params.weight_class + ".npy")
+        params.class_weights = torch.tensor(weights_array, dtype=torch.float32).cuda()
+    else:
+        params.class_weights = None
     print(params)
 
     setup_seed(params.seed)
     torch.cuda.set_device(params.cuda)
+    
+    # ✨ NEW: move tuning here
+    if params.tune:
+        from finetune_tuner import run_optuna_tuning
+        run_optuna_tuning(params)
+        print("Tuning completed. Exiting.")
+        return
+    
     print('The downstream dataset is {}'.format(params.downstream_dataset))
     if params.downstream_dataset == 'FACED':
         load_dataset = faced_dataset.LoadDataset(params)
@@ -129,6 +164,14 @@ def main():
         load_dataset = bciciv2a_dataset.LoadDataset(params)
         data_loader = load_dataset.get_data_loader()
         model = model_for_bciciv2a.Model(params)
+        t = Trainer(params, data_loader, model)
+        t.train_for_multiclass()
+    elif params.downstream_dataset == 'IDUN_EEG':
+        load_dataset = orp_dataset.LoadDataset(params)
+        params.num_subjects = load_dataset.num_subjects if params.num_subjects == -1 else params.num_subjects
+        data_loader = load_dataset.get_data_loader()
+        model = model_for_takeda_idun.Model(params)
+        params.model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
         t = Trainer(params, data_loader, model)
         t.train_for_multiclass()
     print('Done!!!!!')

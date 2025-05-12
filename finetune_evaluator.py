@@ -31,7 +31,7 @@ class Evaluator:
         f1 = f1_score(truths, preds, average='weighted')
         kappa = cohen_kappa_score(truths, preds)
         cm = confusion_matrix(truths, preds)
-        return acc, kappa, f1, cm
+        return acc, kappa, f1, cm, truths, preds
 
     def get_metrics_for_binaryclass(self, model):
         model.eval()
