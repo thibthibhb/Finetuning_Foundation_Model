@@ -133,7 +133,7 @@ def preprocess_openneuro_session(subject_id, session_id, eeg_file, scoring_file,
 
 # === Run preprocessing ===
 root_dir = './OpenNeuro2017'
-output_seq_dir = './Final_dataset/seq_npy'
+output_seq_dir = './Final_dataset/eeg_data_npy'
 output_label_dir = './Final_dataset/label_npy'
 
 os.makedirs(output_seq_dir, exist_ok=True)

@@ -3,7 +3,7 @@ import copy
 import matplotlib.pyplot as plt
 
 from finetune_main import main
-from datasets import orp_dataset
+from datasets import orp_dataset, idun_takeda_dataset
 from models import model_for_takeda_idun
 from finetune_trainer import Trainer
 
@@ -24,7 +24,7 @@ def objective(trial, base_params):
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
 
     # Step 3: Load dataset and model
-    load_dataset = orp_dataset.LoadDataset(params)
+    load_dataset = idun_takeda_dataset.LoadDataset(params)
     data_loader = load_dataset.get_data_loader()
     model = model_for_takeda_idun.Model(params)
 
@@ -52,7 +52,7 @@ def run_optuna_tuning(base_params):
     print("🔵 Starting hyperparameter search...")
 
     # 💡 Pass lambda to give trial access to params
-    study.optimize(lambda trial: objective(trial, base_params),  n_trials=10, timeout=5000)
+    study.optimize(lambda trial: objective(trial, base_params),  n_trials=10, timeout=3600)
     print("🔵 Hyperparameter search completed.")
 
     best_trial = study.best_trial

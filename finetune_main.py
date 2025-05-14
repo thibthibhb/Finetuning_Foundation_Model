@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import os
 from datasets import faced_dataset, seedv_dataset, physio_dataset, shu_dataset, isruc_dataset, chb_dataset, \
-    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset, orp_dataset
+    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset, orp_dataset, idun_takeda_dataset
 from finetune_trainer import Trainer
 from models import model_for_faced, model_for_seedv, model_for_physio, model_for_shu, model_for_isruc, model_for_chb, \
     model_for_speech, model_for_mumtaz, model_for_seedvig, model_for_stress, model_for_tuev, model_for_tuab, \
@@ -167,7 +167,8 @@ def main():
         t = Trainer(params, data_loader, model)
         t.train_for_multiclass()
     elif params.downstream_dataset == 'IDUN_EEG':
-        load_dataset = orp_dataset.LoadDataset(params)
+        #load_dataset = orp_dataset.LoadDataset(params)
+        load_dataset = idun_takeda_dataset.LoadDataset(params)
         params.num_subjects = load_dataset.num_subjects if params.num_subjects == -1 else params.num_subjects
         data_loader = load_dataset.get_data_loader()
         model = model_for_takeda_idun.Model(params)

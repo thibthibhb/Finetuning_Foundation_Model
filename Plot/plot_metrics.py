@@ -4,6 +4,41 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
+def plot_metric_vs_cost(df, metric='accuracy', cost_field='petaFLOPs'):
+    plt.figure(figsize=(8, 6))
+    sns.scatterplot(data=df, x=cost_field, y=metric, hue='model_name')
+    plt.title(f"{metric.title()} vs. {cost_field}")
+    plt.xscale('log')
+    plt.xlabel(cost_field)
+    plt.ylabel(metric.title())
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"Plot/figures/{metric}_vs_{cost_field}.png", dpi=300)
+    plt.show()
+
+def plot_metric_vs_latency(df, metric='accuracy'):
+    plt.figure(figsize=(8, 6))
+    sns.scatterplot(data=df, x='inference_latency_ms', y=metric, hue='model_name')
+    plt.xlabel("Inference Latency (ms)")
+    plt.ylabel(metric.title())
+    plt.title(f"{metric.title()} vs. Inference Latency")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"Plot/figures/{metric}_vs_latency.png", dpi=300)
+    plt.show()
+
+def plot_pareto_flexible(df, metric='accuracy', cost_col='gpu_hours'):
+    plt.figure(figsize=(8, 6))
+    sns.scatterplot(data=df, x=cost_col, y=metric, hue='model_name', style='baseline')
+    plt.xscale('log')
+    plt.title(f"{metric.title()} vs. {cost_col} (Pareto)")
+    plt.xlabel(cost_col.replace("_", " ").title())
+    plt.ylabel(metric.title())
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"Plot/figures/pareto_{metric}_vs_{cost_col}.png", dpi=300)
+    plt.show()
+
 def plot_data_scaling(df, metric='accuracy'):
     plt.figure(figsize=(8, 6))
     sns.lineplot(

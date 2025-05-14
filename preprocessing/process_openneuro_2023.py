@@ -178,8 +178,8 @@ def preprocess_openneuro_session(subject_id, session_id, eeg_file, scoring_file,
 
 
 # === Run preprocessing for all subjects & sessions ===
-root_dir = './OpenNeuro/OpenNeuro2023'
-output_seq_dir = './Final_dataset/seq_npy'
+root_dir = '/root/cbramod/OpenNeuro'
+output_seq_dir = './Final_dataset/eeg_data_npy'
 output_label_dir = './Final_dataset/label_npy'
 
 subjects = sorted(glob(os.path.join(root_dir, 'sub-*')))    

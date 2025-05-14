@@ -105,6 +105,22 @@ class Trainer(object):
         self.log_class_distribution(self.data_loader['train'], "train")
         self.log_class_distribution(self.data_loader['val'], "val")
         self.log_class_distribution(self.data_loader['test'], "test")
+        # Measure inference latency on a single batch
+        try:
+            val_dl = self.data_loader['val']
+            x_val, _ = next(iter(val_dl))
+            x_val = x_val.cuda()
+            start = time.time()
+            _ = self.model(x_val)
+            end = time.time()
+            latency = (end - start) * 1000 / len(x_val)  # ms/sample
+            throughput = len(x_val) / (end - start)      # samples/sec
+            self.model.inference_latency_ms = latency
+            self.model.throughput = throughput
+        except Exception as e:
+            print(f"⚠️ Could not measure inference latency: {e}")
+            self.model.inference_latency_ms = None
+            self.model.throughput = None
 
         print(self.model)
 
@@ -294,7 +310,12 @@ class Trainer(object):
                 'hours_of_data': self.hours_of_data,
                 'n_sleep_epochs': round(self.hours_of_data / 1.5, 1),
                 'class_balance_ratio': json.dumps(self.class_balance_ratio),
-                'eval_split': self.eval_split
+                'eval_split': self.eval_split,
+                'inference_latency_ms': getattr(self.model, 'inference_latency_ms', None),  # if measured
+                'inference_throughput_samples_per_sec': getattr(self.model, 'throughput', None),  # if measured
+                'est_cost_per_hour_usd': torch.cuda.get_device_properties(0).total_memory / 1e9 * 0.9,  # example: assume $0.9 per 1 GPU GB/hr
+                'est_cost_per_night_usd': (gpu_hours / 8.0) * 8 * 0.9,  # assuming 8hr night and $0.9/hr
+
             }
 
             # Append or create CSV
@@ -306,12 +327,13 @@ class Trainer(object):
                 writer.writerow(new_row)
 
             df = pd.read_csv("scaling_laws.csv")
-            print(df.columns)
-            print(df.head())
-            #plot_metrics.plot_data_scaling(df, metric='accuracy')
-            #plot_metrics.plot_model_scaling(df, metric='accuracy')
-            #plot_metrics.plot_pareto(df, metric='accuracy')
-            #plot_metrics.plot_scaling_fit(df)
+
+            plot_metrics.plot_data_scaling(df, metric='accuracy')
+            plot_metrics.plot_model_scaling(df, metric='accuracy')
+            plot_metrics.plot_pareto_flexible(df, metric='f1', cost_col='tokens_seen')
+            plot_metrics.plot_real_time_feasibility(df, metric='accuracy')
+            plot_metrics.plot_cost_per_night(df, metric='kappa')
+            plot_metrics.show_top_models(df, metric='f1', cost_col='gpu_hours', top_k=5)
 
             top_scores = sorted(score_history, key=lambda x: x[2], reverse=True)[:3]
             print("\n=== Top 3 Epochs by Kappa Score ===")
