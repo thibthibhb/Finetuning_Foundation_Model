@@ -39,14 +39,14 @@ def main():
     parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer (AdamW, SGD)')
     parser.add_argument('--clip_value', type=float, default=1, help='clip_value')
     parser.add_argument('--dropout', type=float, default=0.0, help='dropout') # 0.1
-    parser.add_argument('--sample_rate', type=float, default=30, help='sample_rate') # 30
+    parser.add_argument('--sample_rate', type=float, default=200, help='sample_rate') # 200
     """############ Downstream dataset settings ############"""
     parser.add_argument('--downstream_dataset', type=str, default='FACED',
                         help='[FACED, SEED-V, PhysioNet-MI, SHU-MI, ISRUC, CHB-MIT, BCIC2020-3, Mumtaz2016, SEED-VIG, MentalArithmetic, TUEV, TUAB, BCIC-IV-2a]')
     parser.add_argument('--datasets_dir', type=str,
                         default='/data/datasets/BigDownstream/Faced/processed',
                         help='datasets_dir')
-    parser.add_argument('--num_of_classes', type=int, default=4, help='number of classes')
+    parser.add_argument('--num_of_classes', type=int, default=5, help='number of classes')
     parser.add_argument('--model_dir', type=str, default='/data/wjq/models_weights/Big/BigFACED', help='model_dir')
     """############ Downstream dataset settings ############"""
 
@@ -62,10 +62,14 @@ def main():
                         # default='/data/wjq/models_weights/Big/0.4/epoch40_loss0.001386052928864956.pth',
                         default='pretrained_weights/pretrained_weights.pth',
                         help='foundation_dir')
+    parser.add_argument("--run_name", type=str, default="test", help="WandB run name prefix")
+    parser.add_argument('--use_weighted_sampler', type=bool, default=False,
+                        help='Use weighted sampler to balance class distributions')
     # ADD BY THIBAUT
     parser.add_argument('--weight_class', type=str, default=None,
                     help='Path to the .npy file of class weights (optional)')
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
+    parser.add_argument('--gpu_cost_per_hour', type=float, default=0.9, help='Estimated GPU cost per hour (USD)')
 
     params = parser.parse_args()
     

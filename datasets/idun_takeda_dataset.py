@@ -21,7 +21,7 @@ class EpochDataset(Dataset):
                 print(f"[✔️] Loaded {seq_path}")
 
             for i in range(len(label)):
-                if label[i] is None or label[i] < 0 or label[i] == 4:
+                if label[i] is None or label[i] < 0:
                     continue  # skip invalid labels
                 self.samples.append((seq[i], int(label[i])))
         if len(self.samples) == 0:
@@ -76,16 +76,23 @@ class LoadDataset:
         class_weights = 1. / class_counts
         sample_weights = [class_weights[label] for label in labels]
 
-        sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True
-        )
+        if self.params.use_weighted_sampler:
+            print("[INFO] Using WeightedRandomSampler")
+            # compute your sample_weights here
+            sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=len(sample_weights),
+                replacement=True
+            )
+            train_loader = DataLoader(train_set, batch_size=self.params.batch_size, sampler=sampler)
+        else:
+            print("[INFO] Using standard random shuffling")
+            train_loader = DataLoader(train_set, batch_size=self.params.batch_size, shuffle=True)
 
         print(f"[INFO] #Train: {len(train_set)} | #Val: {len(val_set)} | #Test: {len(test_set)}")
 
         return {
-            'train': DataLoader(train_set, batch_size=self.params.batch_size, sampler=sampler),
+            'train': train_loader,
             'val': DataLoader(val_set, batch_size=self.params.batch_size, shuffle=False),
             'test': DataLoader(test_set, batch_size=self.params.batch_size, shuffle=False),
         }
@@ -123,7 +130,7 @@ class LoadDataset:
         
         # Split ORP: 80% train, 10% val, 10% test
         total_orp = len(orp_pairs)
-        train_end = int(0.8 * total_orp)
+        train_end = int(0.7 * total_orp)
         val_end = int(0.9 * total_orp)
 
         orp_train = orp_pairs[:train_end]

@@ -24,6 +24,7 @@ from datetime import timedelta
 from torchinfo import summary
 from sklearn.metrics import classification_report
 from collections import Counter
+from csv import QUOTE_MINIMAL
 
 class Trainer(object):
     def __init__(self, params, data_loader, model):
@@ -56,6 +57,7 @@ class Trainer(object):
             else:
                 other_params.append(param)
 
+
         if self.params.optimizer == 'AdamW':
             if self.params.multi_lr:
                 self.optimizer = torch.optim.AdamW([
@@ -86,25 +88,25 @@ class Trainer(object):
                                    if all(not p.requires_grad for p in m.parameters())])
 
         self.lora_rank = getattr(self.model, "lora_rank", 0)
-
         train_dl = self.data_loader['train']
         self.train_steps_per_epoch = len(train_dl)
-        _tmp = next(iter(train_dl))[0]
-        self.seq_len = _tmp.shape[-1]
-        del _tmp
-
-        sample_window_sec = self.seq_len / self.params.sample_rate
-        self.hours_of_data = (self.train_steps_per_epoch *
-                              self.params.batch_size *
-                              sample_window_sec) / 3600
+        n_batches = len(train_dl)
+        samples_per_batch = self.params.batch_size
+        total_epochs = n_batches * samples_per_batch
+        self.total_epochs = total_epochs
+        self.hours_of_data = (total_epochs * 30) / 3600
         all_labels = [lab for _, y in train_dl for lab in y.tolist()]
         counts = Counter(all_labels)
         self.class_balance_ratio = {cls: c / len(all_labels) for cls, c in counts.items()}
         self.eval_split = getattr(self.params, "eval_split", "same-night")
+        self.gpu_cost_per_hour = getattr(params, "gpu_cost_per_hour", 0.9)
 
+        
         self.log_class_distribution(self.data_loader['train'], "train")
         self.log_class_distribution(self.data_loader['val'], "val")
         self.log_class_distribution(self.data_loader['test'], "test")
+        self.est_cost_per_night_usd = self.gpu_cost_per_hour * torch.cuda.device_count() * 8
+
         # Measure inference latency on a single batch
         try:
             val_dl = self.data_loader['val']
@@ -232,11 +234,9 @@ class Trainer(object):
                 
         total_walltime_min = (timer() - total_train_start) / 60               # ➕ NEW
         train_steps = self.train_steps_per_epoch * self.params.epochs         # ➕ NEW
-        tokens_seen = (train_steps *
-                       self.params.batch_size *
-                       self.seq_len)                                          # ➕ NEW
+        tokens_seen = self.total_epochs
         petaFLOPs = 6 * self.n_params_total * tokens_seen / 1e15              # ➕ NEW
-        gpu_hours = total_walltime_min / 60 * torch.cuda.device_count()       # ➕ NEW
+        gpu_hours = (total_walltime_min / 60 ) * torch.cuda.device_count()       # ➕ NEW
 
 
         if self.best_model_states is None:
@@ -262,8 +262,15 @@ class Trainer(object):
             print("✅ model saved in " + model_path)
 
 
+            gpu_cost_per_hour = 0.9  # adjust based on your actual GPU type
+            num_gpus = torch.cuda.device_count()
+            print(f"Number of GPUs: {num_gpus}")
+            # Total cost of training
+            est_cost_total_usd = gpu_hours * gpu_cost_per_hour
+            # Optional: cost to run one night (8h) using this setup
+            est_cost_per_night_usd = num_gpus * gpu_cost_per_hour * 8
 
-            log_path = "scaling_laws.csv"
+            log_path = "scaling_laws_v_2.csv"
             fieldnames = [
                 'model_name', 'model_size', 'layers', 'heads', 'embedding_dim',
                 'data_fraction', 'num_subjects', 'seed',
@@ -273,7 +280,8 @@ class Trainer(object):
                 'lr_schedule','max_lr','weight_decay','dropout',
                 'aug_noise_dB','mixup_p','time_mask_pct',
                 'hours_of_data','n_sleep_epochs','class_balance_ratio',
-                'eval_split'
+                'eval_split', 'inference_latency_ms','inference_throughput_samples_per_sec', 
+                'est_cost_total_usd', 'est_cost_per_hour_usd', 'est_cost_per_night_usd'         
             ]
 
             new_row = {
@@ -313,20 +321,22 @@ class Trainer(object):
                 'eval_split': self.eval_split,
                 'inference_latency_ms': getattr(self.model, 'inference_latency_ms', None),  # if measured
                 'inference_throughput_samples_per_sec': getattr(self.model, 'throughput', None),  # if measured
-                'est_cost_per_hour_usd': torch.cuda.get_device_properties(0).total_memory / 1e9 * 0.9,  # example: assume $0.9 per 1 GPU GB/hr
-                'est_cost_per_night_usd': (gpu_hours / 8.0) * 8 * 0.9,  # assuming 8hr night and $0.9/hr
+                'est_cost_total_usd': round(est_cost_total_usd, 2),
+                'est_cost_per_hour_usd': round(gpu_cost_per_hour, 2),
+                'est_cost_per_night_usd': round(est_cost_per_night_usd, 2),
 
             }
+            
 
             # Append or create CSV
             file_exists = os.path.isfile(log_path)
             with open(log_path, 'a', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=QUOTE_MINIMAL)
                 if not file_exists:
                     writer.writeheader()
                 writer.writerow(new_row)
 
-            df = pd.read_csv("scaling_laws.csv")
+            df = pd.read_csv("scaling_laws_v_2.csv")
 
             plot_metrics.plot_data_scaling(df, metric='accuracy')
             plot_metrics.plot_model_scaling(df, metric='accuracy')
