@@ -5,14 +5,20 @@ import numpy as np
 import torch
 import os
 from datasets import faced_dataset, seedv_dataset, physio_dataset, shu_dataset, isruc_dataset, chb_dataset, \
-    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset, orp_dataset, idun_takeda_dataset
+    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset, \
+    orp_dataset, idun_datasets, memory_kfold_dataset
 from finetune_trainer import Trainer
 from models import model_for_faced, model_for_seedv, model_for_physio, model_for_shu, model_for_isruc, model_for_chb, \
     model_for_speech, model_for_mumtaz, model_for_seedvig, model_for_stress, model_for_tuev, model_for_tuab, \
-    model_for_bciciv2a, model_for_takeda_idun
+    model_for_bciciv2a, model_for_idun
 import pdb
-      
-def main():
+from statistics import mean, stdev
+from datasets.memory_kfold_dataset import MemoryEfficientKFoldDataset, get_custom_split_kfold
+from torch.utils.data import DataLoader
+import torch
+
+# 
+def main(return_params=False):
     parser = argparse.ArgumentParser(description='Big model downstream')
     
     # Foundation model architecture info (for scaling plots)
@@ -50,7 +56,7 @@ def main():
     parser.add_argument('--model_dir', type=str, default='/data/wjq/models_weights/Big/BigFACED', help='model_dir')
     """############ Downstream dataset settings ############"""
 
-    parser.add_argument('--num_workers', type=int, default=16, help='num_workers')
+    parser.add_argument('--num_workers', type=int, default=8, help='num_workers')
     parser.add_argument('--label_smoothing', type=float, default=0.1, help='label_smoothing')
     parser.add_argument('--multi_lr', type=bool, default=False,
                         help='multi_lr')  # set different learning rates for different modules
@@ -69,10 +75,13 @@ def main():
     parser.add_argument('--weight_class', type=str, default=None,
                     help='Path to the .npy file of class weights (optional)')
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
-    parser.add_argument('--gpu_cost_per_hour', type=float, default=0.9, help='Estimated GPU cost per hour (USD)')
-
+    parser.add_argument('--datasets', type=str, default='ORP', 
+        help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
     params = parser.parse_args()
-    
+    # Automatically compute number of datasets
+    params.dataset_names = [name.strip() for name in params.datasets.split(',')]
+    params.num_datasets = len(params.dataset_names)
+
     # ✅ Load class weights if provided
     if params.weight_class is not None and os.path.exists(params.weight_class + ".npy"):
         weights_array = np.load(params.weight_class + ".npy")
@@ -171,14 +180,91 @@ def main():
         t = Trainer(params, data_loader, model)
         t.train_for_multiclass()
     elif params.downstream_dataset == 'IDUN_EEG':
-        #load_dataset = orp_dataset.LoadDataset(params)
-        load_dataset = idun_takeda_dataset.LoadDataset(params)
-        params.num_subjects = load_dataset.num_subjects if params.num_subjects == -1 else params.num_subjects
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_takeda_idun.Model(params)
-        params.model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
+        load_dataset = idun_datasets.LoadDataset(params)
+        seqs_labels_path_pair = load_dataset.get_all_pairs()
+        params.num_subjects = load_dataset.num_subjects
+        print(f"[INFO] Number of subjects in dataset: {params.num_subjects}")
+
+        # Load once!
+        dataset = MemoryEfficientKFoldDataset(seqs_labels_path_pair)
+
+        # Use single subject-level split
+        fold, train_idx, val_idx, test_idx = next(get_custom_split_kfold(dataset, seed=42))
+
+        print(f"\n▶️ Using split: {len(train_idx)} train, {len(val_idx)} val, {len(test_idx)} test")
+
+        train_set = torch.utils.data.Subset(dataset, train_idx)
+        val_set = torch.utils.data.Subset(dataset, val_idx)
+        test_set = torch.utils.data.Subset(dataset, test_idx)
+
+        train_loader = DataLoader(train_set, batch_size=params.batch_size, shuffle=True, num_workers=params.num_workers)
+        val_loader = DataLoader(val_set, batch_size=params.batch_size, shuffle=False, num_workers=params.num_workers)
+        test_loader = DataLoader(test_set, batch_size=params.batch_size, shuffle=False, num_workers=params.num_workers)
+
+        data_loader = {
+            'train': train_loader,
+            'val': val_loader,
+            'test': test_loader,
+        }
+
+        model = model_for_idun.Model(params)
+        trainer = Trainer(params, data_loader, model)
+
+        print(f"🚀 Training model on fixed split")
+        kappa = trainer.train_for_multiclass()
+        acc, _, f1, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(model)
+
+        print("\n📊 Evaluation Results:")
+        print(f"  Kappa: {kappa:.4f}")
+        print(f"  Acc:   {acc:.4f}")
+        print(f"  F1:    {f1:.4f}")
+
+        return kappa, acc, f1
+
+
+    # elif params.downstream_dataset == 'IDUN_EEG':
+    #     load_dataset = idun_datasets.LoadDataset(params)
+    #     full_pairs = load_dataset.get_all_pairs()
+
+    #     fold_results = []
+    #     for fold, train_pairs, val_pairs, test_pairs in idun_datasets.get_kfold_splits(full_pairs, n_splits=5):
+    #         print(f"\n▶️ Fold {fold}")
+    #         train_loader = load_dataset.get_loader_from_pairs(train_pairs)
+    #         val_loader = load_dataset.get_loader_from_pairs(val_pairs)
+    #         test_loader = load_dataset.get_loader_from_pairs(test_pairs)
+
+    #         data_loader = {'train': train_loader, 'val': val_loader, 'test': test_loader}
+    #         model = model_for_idun.Model(params)
+    #         trainer = Trainer(params, data_loader, model)
+
+    #         kappa = trainer.train_for_multiclass()
+    #         acc, _, f1, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(model)
+    #         fold_results.append({'fold': fold, 'kappa': kappa, 'f1': f1, 'acc': acc})
+
+    #     avg_kappa = mean([r['kappa'] for r in fold_results])
+    #     avg_acc = mean([r['acc'] for r in fold_results])
+    #     avg_f1 = mean([r['f1'] for r in fold_results])
+
+    #     print("\n📊 Cross-Validation Summary:")
+    #     for r in fold_results:
+    #         print(f"  Fold {r['fold']}: Kappa={r['kappa']:.4f}, Acc={r['acc']:.4f}, F1={r['f1']:.4f}")
+    #     print(f"✅ Mean Kappa: {avg_kappa:.4f}, Acc: {avg_acc:.4f}, F1: {avg_f1:.4f}")
+
+    #     if return_params:
+    #         return params  # For tuner startup
+    #     else:
+    #         return avg_kappa, avg_acc, avg_f1  # For Optuna
+
+
+    # elif params.downstream_dataset == 'IDUN_EEG':
+    #     load_dataset = idun_datasets.LoadDataset(params)
+    #     params.num_subjects = load_dataset.num_subjects
+    #     print(f"[INFO] Number of subjects in dataset: {params.num_subjects}")     
+    #     data_loader = load_dataset.get_data_loader()
+    #     model = model_for_idun.Model(params)
+    #     params.model_size = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    #     t = Trainer(params, data_loader, model)
+    #     t.train_for_multiclass()
     print('Done!!!!!')
 
 

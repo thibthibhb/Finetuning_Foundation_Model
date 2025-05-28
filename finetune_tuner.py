@@ -1,12 +1,14 @@
 import optuna
 import copy
+import argparse
 import matplotlib.pyplot as plt
-
-from finetune_main import main
-from datasets import orp_dataset, idun_takeda_dataset
-from models import model_for_takeda_idun
+from datasets import idun_datasets, memory_kfold_dataset
+from models import model_for_idun
 from finetune_trainer import Trainer
-import wandb
+from statistics import mean, stdev
+import torch
+from torch.utils.data import DataLoader, Subset
+
 
 def objective(trial, base_params):
     print("🚀 Starting new trial")
@@ -17,143 +19,85 @@ def objective(trial, base_params):
     params.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
     params.label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2, step=0.01)
     params.dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.05)
-    params.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256])
+    params.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256, 512, 1024])
     params.clip_value = trial.suggest_float("clip_value", 0.1, 2.0)
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
 
-    # NEW: Pretrained weights selection
-    pretrained_weight_path = trial.suggest_categorical(
+    # Pretrained weights
+    params.foundation_dir = trial.suggest_categorical(
         "foundation_dir", [
-            #"pretrained_weights/new_weights_unlabelled_batch128.pth",
-            #"pretrained_weights/new_weights_unlabelled_batch64.pth",
+            "pretrained_weights/new_weights_unlabelled_batch128.pth",
             "pretrained_weights/new_weights_unlabelled_full_data+hyperparam.pth",
-            #"pretrained_weights/pretrained_weights.pth"
+            "pretrained_weights/pretrained_weights.pth",
         ]
     )
-    params.foundation_dir = pretrained_weight_path
 
-    # Log selected hyperparams to Optuna for later inspection
-    trial.set_user_attr("lr", params.lr)
-    trial.set_user_attr("weight_decay", params.weight_decay)
-    trial.set_user_attr("label_smoothing", params.label_smoothing)
-    trial.set_user_attr("dropout", params.dropout)
-    trial.set_user_attr("batch_size", params.batch_size)
-    trial.set_user_attr("clip_value", params.clip_value)
-    trial.set_user_attr("multi_lr", params.multi_lr)
-    trial.set_user_attr("foundation_dir", params.foundation_dir)
 
-        # 👇 Start a W&B run
-    with wandb.init(
-        project="CBraMod-earEEG-tuning",
-        config=params.__dict__,
-        reinit=True,
-        name=params.run_name):
-            # Load dataset & model
-            load_dataset = idun_takeda_dataset.LoadDataset(params)
-            data_loader = load_dataset.get_data_loader()
-            model = model_for_takeda_idun.Model(params)
+    # Load dataset and apply fixed subject-level split
+    load_dataset = idun_datasets.LoadDataset(params)
+    seqs_labels_path_pair = load_dataset.get_all_pairs()
+    params.num_subjects = load_dataset.num_subjects
+    dataset = memory_kfold_dataset.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
 
-            # Train
-            trainer = Trainer(params, data_loader, model)
-            kappa_best = trainer.train_for_multiclass()
+    fold, train_idx, val_idx, test_idx = next(memory_kfold_dataset.get_custom_split_kfold(dataset, seed=42))
 
-            # Evaluate
-            trainer.model.load_state_dict(trainer.best_model_states)
-            acc_test, kappa_test, f1_test, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(trainer.model)
+    print(f"\n▶️ Using fixed split — Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
 
-            # Attach to trial
-            trial.set_user_attr("kappa_test", kappa_test)
-            trial.set_user_attr("f1_test", f1_test)
-            trial.set_user_attr("acc_test", acc_test)
+    train_set = Subset(dataset, train_idx)
+    val_set = Subset(dataset, val_idx)
+    test_set = Subset(dataset, test_idx)
 
-            # Log metrics to wandb
-            wandb.log({
-                "val_kappa": kappa_best,
-                "test_kappa": kappa_test,
-                "test_accuracy": acc_test,
-                "test_f1": f1_test,
-                # Extended metadata
-                "hours_of_data": trainer.hours_of_data,
-                "inference_latency_ms": getattr(trainer.model, 'inference_latency_ms', None),
-                "inference_throughput_samples_per_sec": getattr(trainer.model, 'throughput', None),
-                "num_subjects": getattr(params, 'num_subjects', None),
-                "est_cost_per_night_usd": trainer.est_cost_per_night_usd
-            })
+    train_loader = DataLoader(train_set, batch_size=params.batch_size, shuffle=True, num_workers=params.num_workers)
+    val_loader = DataLoader(val_set, batch_size=params.batch_size, shuffle=False, num_workers=params.num_workers)
+    test_loader = DataLoader(test_set, batch_size=params.batch_size, shuffle=False, num_workers=params.num_workers)
 
-            # Pruning
-            trial.report(kappa_best, step=0)
-            if trial.should_prune():
-                raise optuna.exceptions.TrialPruned()
+    data_loader = {'train': train_loader, 'val': val_loader, 'test': test_loader}
+    model = model_for_idun.Model(params)
+    trainer = Trainer(params, data_loader, model)
 
-    return kappa_best
+    print(f"🚀 Training on fixed split")
+    kappa = trainer.train_for_multiclass()
+    acc, _, f1, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(model)
 
-def run_optuna_tuning(base_params):
-    study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner(n_warmup_steps=5))
+    # Log to trial
+    trial.set_user_attr("test_kappa", kappa)
+    trial.set_user_attr("test_f1", f1)
+    trial.set_user_attr("test_accuracy", acc)
+
+    # Optional pruning
+    if kappa == 0.0:
+        print("🔪 Pruning trial due to kappa == 0.0")
+        raise optuna.exceptions.TrialPruned()
+
+    trial.report(kappa, step=0)
+    if trial.should_prune():
+        raise optuna.exceptions.TrialPruned()
+
+    return kappa
+
+
+def run_optuna_tuning(params):
+    study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner(n_warmup_steps=0))
     print("🔵 Starting hyperparameter search...")
 
-    study.optimize(lambda trial: objective(trial, base_params),  n_trials=2, timeout=144000)
+    study.optimize(lambda trial: objective(trial, params), n_trials=15)
 
-    print("🔵 Hyperparameter search completed.")
     best_trial = study.best_trial
-
-    # Show top trials
     print("=== Top Trials by Test Kappa ===")
-    sorted_trials = sorted(study.trials, key=lambda t: t.user_attrs.get("kappa_test", -1), reverse=True)
+    sorted_trials = sorted(study.trials, key=lambda t: t.user_attrs.get("test_kappa", -1), reverse=True)
     for i, trial in enumerate(sorted_trials[:5], 1):
-        print(f"Top {i} - Trial {trial.number} | Val Kappa: {trial.value:.4f} | Test Kappa: {trial.user_attrs.get('kappa_test'):.4f}")
+        print(f"Top {i} - Trial {trial.number} | Val Kappa: {trial.value:.4f} | Test Kappa: {trial.user_attrs.get('test_kappa'):.4f}")
         print(f"  ↪ Params: {trial.params}")
 
-    print("\n" + "="*60)
-    print(f"✅ Best Trial Number: {best_trial.number}")
-    print(f"✅ Best Validation Kappa: {best_trial.value:.4f}")
-    print("✅ Best Hyperparameters:")
-    for key, value in best_trial.params.items():
-        print(f"  - {key}: {value}")
-    print("="*60 + "\n")
-
-    # 🎯 Retrain best config from scratch
-    print("🎯 Re-training best config on full training set...")
-
-    # Step 1: Create new params
-    final_params = copy.deepcopy(base_params)
+    print("\n✅ Best Trial Summary:")
+    print(f"  Trial #{best_trial.number}")
+    print(f"  Val Kappa: {best_trial.value:.4f}")
     for k, v in best_trial.params.items():
-        setattr(final_params, k, v)
-
-    # Step 2: Setup new dataset, model, trainer
-    load_dataset = idun_takeda_dataset.LoadDataset(final_params)
-    data_loader = load_dataset.get_data_loader()
-    model = model_for_takeda_idun.Model(final_params)
-    trainer = Trainer(final_params, data_loader, model)
-
-    # Step 3: Train and evaluate
-    final_kappa = trainer.train_for_multiclass()
-    trainer.model.load_state_dict(trainer.best_model_states)
-    acc_test, kappa_test, f1_test, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(trainer.model)
-
-    # Step 4: Log final results
-    print("🏁 Final Test Evaluation After Retraining:")
-    print(f"  - Test Accuracy: {acc_test:.4f}")
-    print(f"  - Test Kappa:    {kappa_test:.4f}")
-    print(f"  - Test F1:       {f1_test:.4f}")
-
-    # Step 5: Log to W&B
-    wandb.init(project="CBraMod-earEEG-tuning", name="final_best_model", job_type="retrain", config=final_params.__dict__)
-    wandb.log({
-        "final_test_accuracy": acc_test,
-        "final_test_kappa": kappa_test,
-        "final_test_f1": f1_test,
-        # Extended metadata
-        "hours_of_data": trainer.hours_of_data,
-        "inference_latency_ms": getattr(trainer.model, 'inference_latency_ms', None),
-        "inference_throughput_samples_per_sec": getattr(trainer.model, 'throughput', None),
-        "num_subjects": getattr(final_params, 'num_subjects', None),
-        "est_cost_per_night_usd": trainer.est_cost_per_night_usd
-    })
-    wandb.finish()
+        print(f"  {k}: {v}")
 
 
 if __name__ == "__main__":
-    # ❗ Get params correctly
+    from finetune_main import main
     params = main(return_params=True)
     run_optuna_tuning(params)

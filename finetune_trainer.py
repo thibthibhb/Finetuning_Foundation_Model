@@ -13,7 +13,6 @@ import umap
 from sklearn.decomposition import PCA
 import copy
 import os
-from Plot import plot_metrics
 import pandas as pd
 import seaborn as sns
 import csv
@@ -25,6 +24,7 @@ from torchinfo import summary
 from sklearn.metrics import classification_report
 from collections import Counter
 from csv import QUOTE_MINIMAL
+import wandb
 
 class Trainer(object):
     def __init__(self, params, data_loader, model):
@@ -99,14 +99,15 @@ class Trainer(object):
         counts = Counter(all_labels)
         self.class_balance_ratio = {cls: c / len(all_labels) for cls, c in counts.items()}
         self.eval_split = getattr(self.params, "eval_split", "same-night")
-        self.gpu_cost_per_hour = getattr(params, "gpu_cost_per_hour", 0.9)
+        self.gpu_cost_per_hour = getattr(params, "gpu_cost_per_hour", 0.6)
+        self.num_gpus = torch.cuda.device_count()
 
-        
-        self.log_class_distribution(self.data_loader['train'], "train")
-        self.log_class_distribution(self.data_loader['val'], "val")
-        self.log_class_distribution(self.data_loader['test'], "test")
-        self.est_cost_per_night_usd = self.gpu_cost_per_hour * torch.cuda.device_count() * 8
-
+        # Defaults before measurement
+        self.model.inference_latency_ms = None
+        self.model.throughput = None
+        self.throughput = None
+        self.cost_per_inference_usd = None
+        self.cost_per_night_usd = None
         # Measure inference latency on a single batch
         try:
             val_dl = self.data_loader['val']
@@ -124,7 +125,33 @@ class Trainer(object):
             self.model.inference_latency_ms = None
             self.model.throughput = None
 
-        print(self.model)
+        # Use updated model throughput
+        self.throughput = self.model.throughput
+        samples_per_night = 8 * 3600 // 30  # 8 hours; 960
+        if self.throughput and self.throughput > 0:
+            self.cost_per_inference_usd = self.gpu_cost_per_hour / (3600 * self.throughput)
+        else:
+            self.cost_per_inference_usd = None
+        
+        #self.cost_per_night_usd = self.cost_per_inference_usd * (self.hours_of_data * 3600) / 30
+        self.cost_per_night_usd = self.cost_per_inference_usd * samples_per_night
+
+        # Log class balance
+        self.log_class_distribution(self.data_loader['train'], "train")
+        self.log_class_distribution(self.data_loader['val'], "val")
+        self.log_class_distribution(self.data_loader['test'], "test")
+
+        # Initialize WandB
+        self.wandb_run = None
+        if getattr(self.params, 'use_wandb', True):
+            self.wandb_run = wandb.init(
+                project="CBraMod-earEEG-tuning",
+                config=self.params.__dict__,
+                reinit=True,
+                name=self.params.run_name
+            )
+
+        #print(self.model)
 
     def log_class_distribution(self, loader, name="train"):
         labels = [lab for _, y in loader for lab in y.tolist()]
@@ -140,6 +167,14 @@ class Trainer(object):
             return 0
         else:
             return patience_counter + 1
+
+    def log_wandb_metrics(self, metrics: dict):
+        if self.wandb_run:
+            wandb.log(metrics)
+
+    def close_wandb(self):
+        if self.wandb_run:
+            wandb.finish()
 
 
     def train_for_multiclass(self):
@@ -252,6 +287,21 @@ class Trainer(object):
             print("Test Evaluation: acc: {:.5f}, kappa: {:.5f}, f1: {:.5f}".format(acc, kappa, f1))
             print(cm)
 
+            self.log_wandb_metrics({
+            "val_kappa": kappa_best,
+            "test_kappa": kappa,
+            "test_accuracy": acc,
+            "test_f1": f1,
+            "hours_of_data": self.hours_of_data,
+            "inference_latency_ms": getattr(self.model, 'inference_latency_ms', None),
+            "inference_throughput_samples_per_sec": getattr(self.model, 'throughput', None),
+            "num_subjects": getattr(self.params, 'num_subjects', None),
+            "cost_per_inference_usd": (self.cost_per_inference_usd), 
+            "cost_per_night_usd": (self.cost_per_night_usd),
+            "num_datasets": getattr(self.params, 'num_datasets', None),
+            "dataset_names": ','.join(getattr(self.params, 'dataset_names', [])),
+            })
+            
             if not os.path.isdir(self.params.model_dir):
                 os.makedirs(self.params.model_dir)
 
@@ -262,18 +312,14 @@ class Trainer(object):
             print("✅ model saved in " + model_path)
 
 
-            gpu_cost_per_hour = 0.9  # adjust based on your actual GPU type
             num_gpus = torch.cuda.device_count()
             print(f"Number of GPUs: {num_gpus}")
             # Total cost of training
-            est_cost_total_usd = gpu_hours * gpu_cost_per_hour
-            # Optional: cost to run one night (8h) using this setup
-            est_cost_per_night_usd = num_gpus * gpu_cost_per_hour * 8
 
             log_path = "scaling_laws_v_2.csv"
             fieldnames = [
                 'model_name', 'model_size', 'layers', 'heads', 'embedding_dim',
-                'data_fraction', 'num_subjects', 'seed',
+                'num_subjects', 'seed',
                 'accuracy', 'f1', 'kappa', 'baseline', 'comment'
                 ,'n_params','n_trainable_params','frozen_layers','lora_rank',
                 'train_steps','tokens_seen','petaFLOPs','walltime_min','gpu_hours',
@@ -281,7 +327,8 @@ class Trainer(object):
                 'aug_noise_dB','mixup_p','time_mask_pct',
                 'hours_of_data','n_sleep_epochs','class_balance_ratio',
                 'eval_split', 'inference_latency_ms','inference_throughput_samples_per_sec', 
-                'est_cost_total_usd', 'est_cost_per_hour_usd', 'est_cost_per_night_usd'         
+                'cost_per_night_usd', 'cost_per_inference_usd'
+      
             ]
 
             new_row = {
@@ -290,7 +337,6 @@ class Trainer(object):
                 'layers': self.params.layers,
                 'heads': self.params.heads,
                 'embedding_dim': self.params.embedding_dim,
-                'data_fraction': self.params.data_fraction,
                 'num_subjects': self.params.num_subjects,
                 'seed': self.params.seed,
                 'accuracy': acc,
@@ -319,13 +365,12 @@ class Trainer(object):
                 'n_sleep_epochs': round(self.hours_of_data / 1.5, 1),
                 'class_balance_ratio': json.dumps(self.class_balance_ratio),
                 'eval_split': self.eval_split,
-                'inference_latency_ms': getattr(self.model, 'inference_latency_ms', None),  # if measured
-                'inference_throughput_samples_per_sec': getattr(self.model, 'throughput', None),  # if measured
-                'est_cost_total_usd': round(est_cost_total_usd, 2),
-                'est_cost_per_hour_usd': round(gpu_cost_per_hour, 2),
-                'est_cost_per_night_usd': round(est_cost_per_night_usd, 2),
-
-            }
+                'inference_latency_ms': getattr(self.model, 'inference_latency_ms', None),
+                'inference_throughput_samples_per_sec': self.throughput,
+                'cost_per_night_usd': round(self.cost_per_night_usd, 2) if self.cost_per_night_usd else None,
+                'cost_per_inference_usd': round(self.cost_per_inference_usd, 8) if self.cost_per_inference_usd else None,
+                }
+            print(self.throughput)
             
 
             # Append or create CSV
@@ -337,18 +382,14 @@ class Trainer(object):
                 writer.writerow(new_row)
 
             df = pd.read_csv("scaling_laws_v_2.csv")
-
-            plot_metrics.plot_data_scaling(df, metric='accuracy')
-            plot_metrics.plot_model_scaling(df, metric='accuracy')
-            plot_metrics.plot_pareto_flexible(df, metric='f1', cost_col='tokens_seen')
-            plot_metrics.plot_real_time_feasibility(df, metric='accuracy')
-            plot_metrics.plot_cost_per_night(df, metric='kappa')
-            plot_metrics.show_top_models(df, metric='f1', cost_col='gpu_hours', top_k=5)
-
+            
             top_scores = sorted(score_history, key=lambda x: x[2], reverse=True)[:3]
             print("\n=== Top 3 Epochs by Kappa Score ===")
             for i, (epoch, acc, kappa, f1) in enumerate(top_scores, 1):
                 print(f"Top {i}: Epoch {epoch}, Acc: {acc:.5f}, Kappa: {kappa:.5f}, F1: {f1:.5f}")
+
+        
+        self.close_wandb()
 
         # ✅ Return required values to make Optuna work
         return kappa_best
