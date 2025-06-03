@@ -4,16 +4,11 @@ import random
 import numpy as np
 import torch
 import os
-from datasets import faced_dataset, seedv_dataset, physio_dataset, shu_dataset, isruc_dataset, chb_dataset, \
-    speech_dataset, mumtaz_dataset, seedvig_dataset, stress_dataset, tuev_dataset, tuab_dataset, bciciv2a_dataset, \
-    orp_dataset, idun_datasets, memory_kfold_dataset
+from datasets import faced_dataset, idun_datasets
 from finetune_trainer import Trainer
-from models import model_for_faced, model_for_seedv, model_for_physio, model_for_shu, model_for_isruc, model_for_chb, \
-    model_for_speech, model_for_mumtaz, model_for_seedvig, model_for_stress, model_for_tuev, model_for_tuab, \
-    model_for_bciciv2a, model_for_idun
+from models import model_for_faced, model_for_idun
 import pdb
 from statistics import mean, stdev
-from datasets.memory_kfold_dataset import MemoryEfficientKFoldDataset, get_custom_split_kfold
 from torch.utils.data import DataLoader
 import torch
 
@@ -75,8 +70,9 @@ def main(return_params=False):
     parser.add_argument('--weight_class', type=str, default=None,
                     help='Path to the .npy file of class weights (optional)')
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
-    parser.add_argument('--datasets', type=str, default='ORP', 
-        help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
+    parser.add_argument('--datasets', type=str, default='ORP', help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
+    parser.add_argument('--scheduler', type=str, default='cosine', help='["cosine", "step", "none"]')
+
     params = parser.parse_args()
     # Automatically compute number of datasets
     params.dataset_names = [name.strip() for name in params.datasets.split(',')]
@@ -101,82 +97,11 @@ def main(return_params=False):
         return
     
     print('The downstream dataset is {}'.format(params.downstream_dataset))
+    
     if params.downstream_dataset == 'FACED':
         load_dataset = faced_dataset.LoadDataset(params)
         data_loader = load_dataset.get_data_loader()
         model = model_for_faced.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'SEED-V':
-        load_dataset = seedv_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_seedv.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'PhysioNet-MI':
-        load_dataset = physio_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_physio.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'SHU-MI':
-        load_dataset = shu_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_shu.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'ISRUC':
-        load_dataset = isruc_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_isruc.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'CHB-MIT':
-        load_dataset = chb_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_chb.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'BCIC2020-3':
-        load_dataset = speech_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_speech.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'Mumtaz2016':
-        load_dataset = mumtaz_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_mumtaz.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'SEED-VIG':
-        load_dataset = seedvig_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_seedvig.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_regression()
-    elif params.downstream_dataset == 'MentalArithmetic':
-        load_dataset = stress_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_stress.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'TUEV':
-        load_dataset = tuev_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_tuev.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_multiclass()
-    elif params.downstream_dataset == 'TUAB':
-        load_dataset = tuab_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_tuab.Model(params)
-        t = Trainer(params, data_loader, model)
-        t.train_for_binaryclass()
-    elif params.downstream_dataset == 'BCIC-IV-2a':
-        load_dataset = bciciv2a_dataset.LoadDataset(params)
-        data_loader = load_dataset.get_data_loader()
-        model = model_for_bciciv2a.Model(params)
         t = Trainer(params, data_loader, model)
         t.train_for_multiclass()
     elif params.downstream_dataset == 'IDUN_EEG':
@@ -186,10 +111,10 @@ def main(return_params=False):
         print(f"[INFO] Number of subjects in dataset: {params.num_subjects}")
 
         # Load once!
-        dataset = MemoryEfficientKFoldDataset(seqs_labels_path_pair)
+        dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
 
         # Use single subject-level split
-        fold, train_idx, val_idx, test_idx = next(get_custom_split_kfold(dataset, seed=42))
+        fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42))
 
         print(f"\n▶️ Using split: {len(train_idx)} train, {len(val_idx)} val, {len(test_idx)} test")
 

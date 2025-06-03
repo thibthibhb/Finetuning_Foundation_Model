@@ -25,6 +25,7 @@ from sklearn.metrics import classification_report
 from collections import Counter
 from csv import QUOTE_MINIMAL
 import wandb
+import optuna
 
 class Trainer(object):
     def __init__(self, params, data_loader, model):
@@ -51,7 +52,8 @@ class Trainer(object):
                 backbone_params.append(param)
 
                 if params.frozen:
-                    param.requires_grad = False
+                    for param in model.encoder.parameters():
+                        param.requires_grad = False
                 else:
                     param.requires_grad = True
             else:
@@ -78,9 +80,15 @@ class Trainer(object):
                                                  weight_decay=self.params.weight_decay)
 
         self.data_length = len(self.data_loader['train'])
-        self.optimizer_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=self.params.epochs * self.data_length, eta_min=1e-6
-        )
+        
+        if params.scheduler == "cosine":
+            self.optimizer_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=self.params.epochs * self.data_length, eta_min=1e-6)
+        elif params.scheduler == "step":
+            self.optimizer_scheduler = torch.optim.lr_scheduler.StepLR(
+                self.optimizer, step_size=max(1, self.params.epochs // 3), gamma=0.5)
+        elif params.scheduler == "none":
+            self.optimizer_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda epoch: 1.0)
 
         self.n_params_total = sum(p.numel() for p in self.model.parameters())
         self.n_params_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -177,13 +185,13 @@ class Trainer(object):
             wandb.finish()
 
 
-    def train_for_multiclass(self):
+    def train_for_multiclass(self, trial=None):
         f1_best = 0
         kappa_best = 0
         acc_best = 0
         best_f1_epoch = 0
         score_history = []
-        log_history = []
+        #log_history = []
         cm_best = None
         patience_counter = 0
 
@@ -216,7 +224,11 @@ class Trainer(object):
             if epoch % getattr(self.params, "eval_every", 1) == 0:
                 with torch.no_grad():
                     acc, kappa, f1, cm, y_true, y_pred = self.val_eval.get_metrics_for_multiclass(self.model)
-                    #self.print_classification_report(y_true, y_pred)
+                    if trial is not None:
+                        trial.report(kappa, step=epoch)
+                        if kappa <= 0.05:
+                            print(f"🔪 Pruning trial at epoch {epoch} due to kappa={kappa:.4f} <= 0.05")
+                            raise optuna.exceptions.TrialPruned()
 
                     val_losses = []
                     for x_val, y_val in self.data_loader['val']:
@@ -256,23 +268,16 @@ class Trainer(object):
                         print("Early stopping triggered.")
                         break
 
-                    log_history.append({
-                        'epoch': epoch + 1,
-                        'train_loss': np.mean(losses),
-                        'val_loss': val_loss_mean,
-                        'val_acc': acc,
-                        'val_kappa': kappa,
-                        'val_f1': f1
-                    })
+                    # log_history.append({
+                    #     'epoch': epoch + 1,
+                    #     'train_loss': np.mean(losses),
+                    #     'val_loss': val_loss_mean,
+                    #     'val_acc': acc,
+                    #     'val_kappa': kappa,
+                    #     'val_f1': f1
+                    # })
 
                 score_history.append((epoch + 1, acc, kappa, f1))
-                
-        total_walltime_min = (timer() - total_train_start) / 60               # ➕ NEW
-        train_steps = self.train_steps_per_epoch * self.params.epochs         # ➕ NEW
-        tokens_seen = self.total_epochs
-        petaFLOPs = 6 * self.n_params_total * tokens_seen / 1e15              # ➕ NEW
-        gpu_hours = (total_walltime_min / 60 ) * torch.cuda.device_count()       # ➕ NEW
-
 
         if self.best_model_states is None:
             print("⚠️ Warning: No improvement in validation. Saving current model as best.")
@@ -288,20 +293,22 @@ class Trainer(object):
             print(cm)
 
             self.log_wandb_metrics({
-            "val_kappa": kappa_best,
-            "test_kappa": kappa,
-            "test_accuracy": acc,
-            "test_f1": f1,
-            "hours_of_data": self.hours_of_data,
-            "inference_latency_ms": getattr(self.model, 'inference_latency_ms', None),
-            "inference_throughput_samples_per_sec": getattr(self.model, 'throughput', None),
-            "num_subjects": getattr(self.params, 'num_subjects', None),
-            "cost_per_inference_usd": (self.cost_per_inference_usd), 
-            "cost_per_night_usd": (self.cost_per_night_usd),
-            "num_datasets": getattr(self.params, 'num_datasets', None),
-            "dataset_names": ','.join(getattr(self.params, 'dataset_names', [])),
+                "val_kappa": kappa_best,
+                "test_kappa": kappa,
+                "test_accuracy": acc,
+                "test_f1": f1,
+                "scheduler": type(self.optimizer_scheduler).__name__,
+                "hours_of_data": self.hours_of_data,
+                "inference_latency_ms": getattr(self.model, 'inference_latency_ms', None),
+                "inference_throughput_samples_per_sec": getattr(self.model, 'throughput', None),
+                "num_subjects": getattr(self.params, 'num_subjects', None),
+                "cost_per_inference_usd": self.cost_per_inference_usd, 
+                "cost_per_night_usd": self.cost_per_night_usd,
+                "num_datasets": getattr(self.params, 'num_datasets', None),
+                "dataset_names": ','.join(getattr(self.params, 'dataset_names', [])),
+                "epochs": self.params.epochs,
             })
-            
+
             if not os.path.isdir(self.params.model_dir):
                 os.makedirs(self.params.model_dir)
 
@@ -311,234 +318,155 @@ class Trainer(object):
             torch.save(self.model.state_dict(), model_path)
             print("✅ model saved in " + model_path)
 
-
-            num_gpus = torch.cuda.device_count()
-            print(f"Number of GPUs: {num_gpus}")
-            # Total cost of training
-
-            log_path = "scaling_laws_v_2.csv"
-            fieldnames = [
-                'model_name', 'model_size', 'layers', 'heads', 'embedding_dim',
-                'num_subjects', 'seed',
-                'accuracy', 'f1', 'kappa', 'baseline', 'comment'
-                ,'n_params','n_trainable_params','frozen_layers','lora_rank',
-                'train_steps','tokens_seen','petaFLOPs','walltime_min','gpu_hours',
-                'lr_schedule','max_lr','weight_decay','dropout',
-                'aug_noise_dB','mixup_p','time_mask_pct',
-                'hours_of_data','n_sleep_epochs','class_balance_ratio',
-                'eval_split', 'inference_latency_ms','inference_throughput_samples_per_sec', 
-                'cost_per_night_usd', 'cost_per_inference_usd'
-      
-            ]
-
-            new_row = {
-                'model_name': self.params.model_name,
-                'model_size': self.params.model_size,
-                'layers': self.params.layers,
-                'heads': self.params.heads,
-                'embedding_dim': self.params.embedding_dim,
-                'num_subjects': self.params.num_subjects,
-                'seed': self.params.seed,
-                'accuracy': acc,
-                'f1': f1,
-                'kappa': kappa,
-                'baseline': self.params.baseline if hasattr(self.params, 'baseline') else False,
-                'comment': self.params.comment if hasattr(self.params, 'comment') else "",
-                # ➕ NEW  ------------  scaling & env fields  -------------
-                'n_params': self.n_params_total,
-                'n_trainable_params': self.n_params_trainable,
-                'frozen_layers': self.frozen_layers,
-                'lora_rank': self.lora_rank,
-                'train_steps': train_steps,
-                'tokens_seen': tokens_seen,
-                'petaFLOPs': petaFLOPs,
-                'walltime_min': total_walltime_min,
-                'gpu_hours': gpu_hours,
-                'lr_schedule': type(self.optimizer_scheduler).__name__,
-                'max_lr': max([g['lr'] for g in optim_state['param_groups']]),
-                'weight_decay': self.params.weight_decay,
-                'dropout': self.params.dropout,
-                'aug_noise_dB': getattr(self.params, 'aug_noise_dB', None),
-                'mixup_p': getattr(self.params, 'mixup_p', None),
-                'time_mask_pct': getattr(self.params, 'time_mask_pct', None),
-                'hours_of_data': self.hours_of_data,
-                'n_sleep_epochs': round(self.hours_of_data / 1.5, 1),
-                'class_balance_ratio': json.dumps(self.class_balance_ratio),
-                'eval_split': self.eval_split,
-                'inference_latency_ms': getattr(self.model, 'inference_latency_ms', None),
-                'inference_throughput_samples_per_sec': self.throughput,
-                'cost_per_night_usd': round(self.cost_per_night_usd, 2) if self.cost_per_night_usd else None,
-                'cost_per_inference_usd': round(self.cost_per_inference_usd, 8) if self.cost_per_inference_usd else None,
-                }
-            print(self.throughput)
-            
-
-            # Append or create CSV
-            file_exists = os.path.isfile(log_path)
-            with open(log_path, 'a', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames, quoting=QUOTE_MINIMAL)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(new_row)
-
-            df = pd.read_csv("scaling_laws_v_2.csv")
-            
-            top_scores = sorted(score_history, key=lambda x: x[2], reverse=True)[:3]
-            print("\n=== Top 3 Epochs by Kappa Score ===")
-            for i, (epoch, acc, kappa, f1) in enumerate(top_scores, 1):
-                print(f"Top {i}: Epoch {epoch}, Acc: {acc:.5f}, Kappa: {kappa:.5f}, F1: {f1:.5f}")
-
-        
         self.close_wandb()
 
-        # ✅ Return required values to make Optuna work
         return kappa_best
 
 
-    def train_for_binaryclass(self):
-        acc_best = 0
-        roc_auc_best = 0
-        pr_auc_best = 0
-        cm_best = None
-        for epoch in range(self.params.epochs):
-            self.model.train()
-            start_time = timer()
-            losses = []
-            for x, y in tqdm(self.data_loader['train'], mininterval=10):
-                self.optimizer.zero_grad()
-                x = x.cuda()
-                y = y.cuda()
-                pred = self.model(x)
+    # def train_for_binaryclass(self):
+    #     acc_best = 0
+    #     roc_auc_best = 0
+    #     pr_auc_best = 0
+    #     cm_best = None
+    #     for epoch in range(self.params.epochs):
+    #         self.model.train()
+    #         start_time = timer()
+    #         losses = []
+    #         for x, y in tqdm(self.data_loader['train'], mininterval=10):
+    #             self.optimizer.zero_grad()
+    #             x = x.cuda()
+    #             y = y.cuda()
+    #             pred = self.model(x)
 
-                loss = self.criterion(pred, y)
+    #             loss = self.criterion(pred, y)
 
-                loss.backward()
-                losses.append(loss.data.cpu().numpy())
-                if self.params.clip_value > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
-                    # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
-                self.optimizer.step()
-                self.optimizer_scheduler.step()
+    #             loss.backward()
+    #             losses.append(loss.data.cpu().numpy())
+    #             if self.params.clip_value > 0:
+    #                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
+    #                 # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
+    #             self.optimizer.step()
+    #             self.optimizer_scheduler.step()
 
-            optim_state = self.optimizer.state_dict()
+    #         optim_state = self.optimizer.state_dict()
 
-            with torch.no_grad():
-                acc, pr_auc, roc_auc, cm = self.val_eval.get_metrics_for_binaryclass(self.model)
-                print(
-                    "Epoch {} : Training Loss: {:.5f}, acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
-                        epoch + 1,
-                        np.mean(losses),
-                        acc,
-                        pr_auc,
-                        roc_auc,
-                        optim_state['param_groups'][0]['lr'],
-                        (timer() - start_time) / 60
-                    )
-                )
-                print(cm)
-                if roc_auc > roc_auc_best:
-                    print("kappa increasing....saving weights !! ")
-                    print("Val Evaluation: acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}".format(
-                        acc,
-                        pr_auc,
-                        roc_auc,
-                    ))
-                    best_f1_epoch = epoch + 1
-                    acc_best = acc
-                    pr_auc_best = pr_auc
-                    roc_auc_best = roc_auc
-                    cm_best = cm
-                    self.best_model_states = copy.deepcopy(self.model.state_dict())
-        self.model.load_state_dict(self.best_model_states)
-        with torch.no_grad():
-            print("***************************Test************************")
-            acc, pr_auc, roc_auc, cm = self.test_eval.get_metrics_for_binaryclass(self.model)
-            print("***************************Test results************************")
-            print(
-                "Test Evaluation: acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}".format(
-                    acc,
-                    pr_auc,
-                    roc_auc,
-                )
-            )
-            print(cm)
-            if not os.path.isdir(self.params.model_dir):
-                os.makedirs(self.params.model_dir)
-            model_path = self.params.model_dir + "/epoch{}_acc_{:.5f}_pr_{:.5f}_roc_{:.5f}.pth".format(best_f1_epoch, acc, pr_auc, roc_auc)
-            torch.save(self.model.state_dict(), model_path)
-            print("model save in " + model_path)
+    #         with torch.no_grad():
+    #             acc, pr_auc, roc_auc, cm = self.val_eval.get_metrics_for_binaryclass(self.model)
+    #             print(
+    #                 "Epoch {} : Training Loss: {:.5f}, acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
+    #                     epoch + 1,
+    #                     np.mean(losses),
+    #                     acc,
+    #                     pr_auc,
+    #                     roc_auc,
+    #                     optim_state['param_groups'][0]['lr'],
+    #                     (timer() - start_time) / 60
+    #                 )
+    #             )
+    #             print(cm)
+    #             if roc_auc > roc_auc_best:
+    #                 print("kappa increasing....saving weights !! ")
+    #                 print("Val Evaluation: acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}".format(
+    #                     acc,
+    #                     pr_auc,
+    #                     roc_auc,
+    #                 ))
+    #                 best_f1_epoch = epoch + 1
+    #                 acc_best = acc
+    #                 pr_auc_best = pr_auc
+    #                 roc_auc_best = roc_auc
+    #                 cm_best = cm
+    #                 self.best_model_states = copy.deepcopy(self.model.state_dict())
+    #     self.model.load_state_dict(self.best_model_states)
+    #     with torch.no_grad():
+    #         print("***************************Test************************")
+    #         acc, pr_auc, roc_auc, cm = self.test_eval.get_metrics_for_binaryclass(self.model)
+    #         print("***************************Test results************************")
+    #         print(
+    #             "Test Evaluation: acc: {:.5f}, pr_auc: {:.5f}, roc_auc: {:.5f}".format(
+    #                 acc,
+    #                 pr_auc,
+    #                 roc_auc,
+    #             )
+    #         )
+    #         print(cm)
+    #         if not os.path.isdir(self.params.model_dir):
+    #             os.makedirs(self.params.model_dir)
+    #         model_path = self.params.model_dir + "/epoch{}_acc_{:.5f}_pr_{:.5f}_roc_{:.5f}.pth".format(best_f1_epoch, acc, pr_auc, roc_auc)
+    #         torch.save(self.model.state_dict(), model_path)
+    #         print("model save in " + model_path)
 
-    def train_for_regression(self):
-        corrcoef_best = 0
-        r2_best = 0
-        rmse_best = 0
-        for epoch in range(self.params.epochs):
-            self.model.train()
-            start_time = timer()
-            losses = []
-            for i, (x, y) in tqdm(self.data_loader['train']):
-                print(f"Batch {i}: label distribution:", y.unique(return_counts=True))
-                if i > 2:  # Only print a few batches
-                    break
+    # def train_for_regression(self):
+    #     corrcoef_best = 0
+    #     r2_best = 0
+    #     rmse_best = 0
+    #     for epoch in range(self.params.epochs):
+    #         self.model.train()
+    #         start_time = timer()
+    #         losses = []
+    #         for i, (x, y) in tqdm(self.data_loader['train']):
+    #             print(f"Batch {i}: label distribution:", y.unique(return_counts=True))
+    #             if i > 2:  # Only print a few batches
+    #                 break
 
-            for x, y in tqdm(self.data_loader['train'], mininterval=10):
-                self.optimizer.zero_grad()
-                x = x.cuda()
-                y = y.cuda()
-                pred = self.model(x)
-                loss = self.criterion(pred, y)
+    #         for x, y in tqdm(self.data_loader['train'], mininterval=10):
+    #             self.optimizer.zero_grad()
+    #             x = x.cuda()
+    #             y = y.cuda()
+    #             pred = self.model(x)
+    #             loss = self.criterion(pred, y)
 
-                loss.backward()
-                losses.append(loss.data.cpu().numpy())
-                if self.params.clip_value > 0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
-                    # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
-                self.optimizer.step()
-                self.optimizer_scheduler.step()
+    #             loss.backward()
+    #             losses.append(loss.data.cpu().numpy())
+    #             if self.params.clip_value > 0:
+    #                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
+    #                 # torch.nn.utils.clip_grad_value_(self.model.parameters(), self.params.clip_value)
+    #             self.optimizer.step()
+    #             self.optimizer_scheduler.step()
 
-            optim_state = self.optimizer.state_dict()
+    #         optim_state = self.optimizer.state_dict()
 
-            with torch.no_grad():
-                corrcoef, r2, rmse = self.val_eval.get_metrics_for_regression(self.model)
-                print(
-                    "Epoch {} : Training Loss: {:.5f}, corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
-                        epoch + 1,
-                        np.mean(losses),
-                        corrcoef,
-                        r2,
-                        rmse,
-                        optim_state['param_groups'][0]['lr'],
-                        (timer() - start_time) / 60
-                    )
-                )
-                if r2 > r2_best:
-                    print("kappa increasing....saving weights !! ")
-                    print("Val Evaluation: corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}".format(
-                        corrcoef,
-                        r2,
-                        rmse,
-                    ))
-                    best_r2_epoch = epoch + 1
-                    corrcoef_best = corrcoef
-                    r2_best = r2
-                    rmse_best = rmse
-                    self.best_model_states = copy.deepcopy(self.model.state_dict())
+    #         with torch.no_grad():
+    #             corrcoef, r2, rmse = self.val_eval.get_metrics_for_regression(self.model)
+    #             print(
+    #                 "Epoch {} : Training Loss: {:.5f}, corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}, LR: {:.5f}, Time elapsed {:.2f} mins".format(
+    #                     epoch + 1,
+    #                     np.mean(losses),
+    #                     corrcoef,
+    #                     r2,
+    #                     rmse,
+    #                     optim_state['param_groups'][0]['lr'],
+    #                     (timer() - start_time) / 60
+    #                 )
+    #             )
+    #             if r2 > r2_best:
+    #                 print("kappa increasing....saving weights !! ")
+    #                 print("Val Evaluation: corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}".format(
+    #                     corrcoef,
+    #                     r2,
+    #                     rmse,
+    #                 ))
+    #                 best_r2_epoch = epoch + 1
+    #                 corrcoef_best = corrcoef
+    #                 r2_best = r2
+    #                 rmse_best = rmse
+    #                 self.best_model_states = copy.deepcopy(self.model.state_dict())
 
-        self.model.load_state_dict(self.best_model_states)
-        with torch.no_grad():
-            print("***************************Test************************")
-            corrcoef, r2, rmse = self.test_eval.get_metrics_for_regression(self.model)
-            print("***************************Test results************************")
-            print(
-                "Test Evaluation: corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}".format(
-                    corrcoef,
-                    r2,
-                    rmse,
-                )
-            )
+    #     self.model.load_state_dict(self.best_model_states)
+    #     with torch.no_grad():
+    #         print("***************************Test************************")
+    #         corrcoef, r2, rmse = self.test_eval.get_metrics_for_regression(self.model)
+    #         print("***************************Test results************************")
+    #         print(
+    #             "Test Evaluation: corrcoef: {:.5f}, r2: {:.5f}, rmse: {:.5f}".format(
+    #                 corrcoef,
+    #                 r2,
+    #                 rmse,
+    #             )
+    #         )
 
-            if not os.path.isdir(self.params.model_dir):
-                os.makedirs(self.params.model_dir)
-            model_path = self.params.model_dir + "/epoch{}_corrcoef_{:.5f}_r2_{:.5f}_rmse_{:.5f}.pth".format(best_r2_epoch, corrcoef, r2, rmse)
-            torch.save(self.model.state_dict(), model_path)
-            print("model save in " + model_path)
+    #         if not os.path.isdir(self.params.model_dir):
+    #             os.makedirs(self.params.model_dir)
+    #         model_path = self.params.model_dir + "/epoch{}_corrcoef_{:.5f}_r2_{:.5f}_rmse_{:.5f}.pth".format(best_r2_epoch, corrcoef, r2, rmse)
+    #         torch.save(self.model.state_dict(), model_path)
+    #         print("model save in " + model_path)

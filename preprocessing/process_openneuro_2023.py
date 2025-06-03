@@ -86,10 +86,7 @@ def plot_raw_vs_filtered(raw_data, filtered_data, sfreq, title='Signal'):
     plt.show()
 
 def preprocess_openneuro_session(subject_id, session_id, eeg_file, scoring_file, output_seq_dir, output_label_dir):
-    import os
-    import numpy as np
-    import mne
-    import torch
+
 
     def create_bipolar(data, ch_names, ch1, ch2):
         idx1 = ch_names.index(ch1)
@@ -179,8 +176,8 @@ def preprocess_openneuro_session(subject_id, session_id, eeg_file, scoring_file,
 
 # === Run preprocessing for all subjects & sessions ===
 root_dir = '/root/cbramod/OpenNeuro'
-output_seq_dir = './Final_dataset/eeg_data_npy'
-output_label_dir = './Final_dataset/label_npy'
+output_seq_dir = './Final_dataset/2023_Open_N/eeg_data_npy'
+output_label_dir = './Final_dataset/2023_Open_N/label_npy'
 
 subjects = sorted(glob(os.path.join(root_dir, 'sub-*')))    
 

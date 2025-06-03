@@ -19,10 +19,12 @@ def objective(trial, base_params):
     params.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
     params.label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2, step=0.01)
     params.dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.05)
-    params.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256, 512, 1024])
+    params.batch_size = trial.suggest_categorical("batch_size", [512, 1024]) #128, 256, 
     params.clip_value = trial.suggest_float("clip_value", 0.1, 2.0)
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
+    params.optimizer = trial.suggest_categorical("optimizer", ["AdamW"])
+    params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
 
     # Pretrained weights
     params.foundation_dir = trial.suggest_categorical(
@@ -38,9 +40,9 @@ def objective(trial, base_params):
     load_dataset = idun_datasets.LoadDataset(params)
     seqs_labels_path_pair = load_dataset.get_all_pairs()
     params.num_subjects = load_dataset.num_subjects
-    dataset = memory_kfold_dataset.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
+    dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
 
-    fold, train_idx, val_idx, test_idx = next(memory_kfold_dataset.get_custom_split_kfold(dataset, seed=42))
+    fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42))
 
     print(f"\n▶️ Using fixed split — Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
 
@@ -57,7 +59,11 @@ def objective(trial, base_params):
     trainer = Trainer(params, data_loader, model)
 
     print(f"🚀 Training on fixed split")
-    kappa = trainer.train_for_multiclass()
+    try:
+        kappa = trainer.train_for_multiclass(trial=trial)
+    except optuna.exceptions.TrialPruned:
+        print("🔪 Trial was pruned early")
+        raise
     acc, _, f1, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(model)
 
     # Log to trial
@@ -65,13 +71,9 @@ def objective(trial, base_params):
     trial.set_user_attr("test_f1", f1)
     trial.set_user_attr("test_accuracy", acc)
 
-    # Optional pruning
-    if kappa == 0.0:
-        print("🔪 Pruning trial due to kappa == 0.0")
-        raise optuna.exceptions.TrialPruned()
-
-    trial.report(kappa, step=0)
-    if trial.should_prune():
+    # Optional fallback pruning if final kappa is very low
+    if kappa <= 0.03:
+        print("🔪 Final pruning due to very low kappa")
         raise optuna.exceptions.TrialPruned()
 
     return kappa
@@ -81,7 +83,7 @@ def run_optuna_tuning(params):
     study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner(n_warmup_steps=0))
     print("🔵 Starting hyperparameter search...")
 
-    study.optimize(lambda trial: objective(trial, params), n_trials=15)
+    study.optimize(lambda trial: objective(trial, params), n_trials=20)
 
     best_trial = study.best_trial
     print("=== Top Trials by Test Kappa ===")

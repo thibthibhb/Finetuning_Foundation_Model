@@ -62,12 +62,9 @@ def preprocess_openneuro_session(subject_id, session_id, eeg_file, scoring_file,
 
     preferred_pairs = [
         ('ELG', 'ERG'),
-        ('ELA', 'ERA'),
         ('ELE', 'ERE'),
         ('ELI', 'ERI'),
-        ('ELB', 'ERB'),
         ('ELK', 'ERK'),
-        ('ELB1', 'ERB1'),
     ]
 
     pair_index = 1
@@ -133,8 +130,8 @@ def preprocess_openneuro_session(subject_id, session_id, eeg_file, scoring_file,
 
 # === Run preprocessing ===
 root_dir = './OpenNeuro2017'
-output_seq_dir = './Final_dataset/eeg_data_npy'
-output_label_dir = './Final_dataset/label_npy'
+output_seq_dir = './Final_dataset/2017_Open_N/eeg_data_npy'
+output_label_dir = './Final_dataset/2017_Open_N/label_npy'
 
 os.makedirs(output_seq_dir, exist_ok=True)
 os.makedirs(output_label_dir, exist_ok=True)
