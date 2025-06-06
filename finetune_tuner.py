@@ -2,7 +2,7 @@ import optuna
 import copy
 import argparse
 import matplotlib.pyplot as plt
-from datasets import idun_datasets, memory_kfold_dataset
+from datasets import idun_datasets
 from models import model_for_idun
 from finetune_trainer import Trainer
 from statistics import mean, stdev
@@ -23,29 +23,33 @@ def objective(trial, base_params):
     params.clip_value = trial.suggest_float("clip_value", 0.1, 2.0)
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
-    params.optimizer = trial.suggest_categorical("optimizer", ["AdamW"])
+    params.optimizer = trial.suggest_categorical("optimizer", ["AdamW","Lion"])
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
 
     # Pretrained weights
     params.foundation_dir = trial.suggest_categorical(
         "foundation_dir", [
-            "pretrained_weights/new_weights_unlabelled_batch128.pth",
-            "pretrained_weights/new_weights_unlabelled_full_data+hyperparam.pth",
-            "pretrained_weights/pretrained_weights.pth",
-        ]
+            "optuna_ckpts/BEST__loss8698.99.pth",
+            # "optuna_ckpts/BEST__loss10527.31.pth",
+            # "optuna_ckpts/BEST__loss11060.72.pth",
+            "pretrained_weights/pretrained_weights.pth"
+            ]
     )
-
 
     # Load dataset and apply fixed subject-level split
     load_dataset = idun_datasets.LoadDataset(params)
     seqs_labels_path_pair = load_dataset.get_all_pairs()
-    params.num_subjects = load_dataset.num_subjects
     dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
 
     fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42))
 
     print(f"\n▶️ Using fixed split — Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
-
+    
+    if params.num_subjects_train < 0:      # leave CLI override untouched
+        params.num_subjects_train = dataset.num_subjects_train
+    # if params.num_nights_train < 0:
+    #     params.num_nights_train   = dataset.num_nights_train
+        
     train_set = Subset(dataset, train_idx)
     val_set = Subset(dataset, val_idx)
     test_set = Subset(dataset, test_idx)

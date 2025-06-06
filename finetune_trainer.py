@@ -60,6 +60,18 @@ class Trainer(object):
                 other_params.append(param)
 
 
+        def _get_lion_cls():
+            if hasattr(torch.optim, "Lion"):            # PyTorch ≥ 2.3
+                return torch.optim.Lion
+            try:                                        # community wheel
+                from lion_pytorch import Lion as LionCls
+                return LionCls
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "Requested optimizer 'Lion' but neither torch.optim.Lion "
+                    "nor the 'lion-pytorch' package is available."
+                ) from exc
+
         if self.params.optimizer == 'AdamW':
             if self.params.multi_lr:
                 self.optimizer = torch.optim.AdamW([
@@ -69,15 +81,41 @@ class Trainer(object):
             else:
                 self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.params.lr,
                                                    weight_decay=self.params.weight_decay)
-        else:
+
+        elif self.params.optimizer == "Lion":                       # ⬅️ NEW
+            LionCls = _get_lion_cls()
             if self.params.multi_lr:
-                self.optimizer = torch.optim.SGD([
-                    {'params': backbone_params, 'lr': self.params.lr},
-                    {'params': other_params, 'lr': self.params.lr * 5}
-                ],  momentum=0.9, weight_decay=self.params.weight_decay)
+                self.optimizer = LionCls(
+                    [
+                        {"params": backbone_params, "lr": self.params.lr},
+                        {"params": other_params,  "lr": self.params.lr * 5},
+                    ],
+                    lr=self.params.lr,
+                    weight_decay=self.params.weight_decay,
+                    betas=(0.9, 0.99),              # authors’ defaults
+                )
             else:
-                self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.params.lr, momentum=0.9,
-                                                 weight_decay=self.params.weight_decay)
+                self.optimizer = LionCls(
+                    self.model.parameters(),
+                    lr=self.params.lr,
+                    weight_decay=self.params.weight_decay,
+                    betas=(0.9, 0.99),
+                )
+
+        else:  # fallback / legacy: SGD
+            if self.params.multi_lr:
+                self.optimizer = torch.optim.SGD(
+                    [
+                        {"params": backbone_params, "lr": self.params.lr},
+                        {"params": other_params,  "lr": self.params.lr * 5},
+                    ],
+                    momentum=0.9,
+                    weight_decay=self.params.weight_decay,
+                )
+            else:
+                self.optimizer = torch.optim.SGD(self.model.parameters(),lr=self.params.lr, momentum=0.9,
+                                weight_decay=self.params.weight_decay,)
+
 
         self.data_length = len(self.data_loader['train'])
         
@@ -301,7 +339,7 @@ class Trainer(object):
                 "hours_of_data": self.hours_of_data,
                 "inference_latency_ms": getattr(self.model, 'inference_latency_ms', None),
                 "inference_throughput_samples_per_sec": getattr(self.model, 'throughput', None),
-                "num_subjects": getattr(self.params, 'num_subjects', None),
+                "num_subjects_train": getattr(self.params, 'num_subjects_train', None),
                 "cost_per_inference_usd": self.cost_per_inference_usd, 
                 "cost_per_night_usd": self.cost_per_night_usd,
                 "num_datasets": getattr(self.params, 'num_datasets', None),

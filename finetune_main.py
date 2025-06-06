@@ -11,6 +11,7 @@ import pdb
 from statistics import mean, stdev
 from torch.utils.data import DataLoader
 import torch
+from finetune_tuner import run_optuna_tuning
 
 # 
 def main(return_params=False):
@@ -25,7 +26,8 @@ def main(return_params=False):
 
     # Data-related info
     parser.add_argument('--data_fraction', type=float, default=1.0, help='Fraction of training data used')
-    parser.add_argument('--num_subjects', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
+    parser.add_argument('--num_subjects_train', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
+    #parser.add_argument('--num_nights_train', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
 
     # Experiment tracking
     parser.add_argument('--baseline', action='store_true', help='Is this a non-foundation baseline model?')
@@ -33,7 +35,7 @@ def main(return_params=False):
 
     parser.add_argument('--seed', type=int, default=3407, help='random seed (default: 0)')
     parser.add_argument('--cuda', type=int, default=0, help='cuda number (default: 1)')
-    parser.add_argument('--epochs', type=int, default=20, help='number of epochs (default: 5)')
+    parser.add_argument('--epochs', type=int, default=100, help='number of epochs (default: 5)')
     parser.add_argument('--batch_size', type=int, default=64, help='batch size for training (default: 32)')
     parser.add_argument('--lr', type=float, default=5e-4, help='learning rate (default: 1e-3)')
     parser.add_argument('--weight_decay', type=float, default=0, help='weight decay (default: 1e-2)') #5e-2
@@ -91,7 +93,6 @@ def main(return_params=False):
     
     # ✨ NEW: move tuning here
     if params.tune:
-        from finetune_tuner import run_optuna_tuning
         run_optuna_tuning(params)
         print("Tuning completed. Exiting.")
         return
@@ -104,11 +105,10 @@ def main(return_params=False):
         model = model_for_faced.Model(params)
         t = Trainer(params, data_loader, model)
         t.train_for_multiclass()
+        
     elif params.downstream_dataset == 'IDUN_EEG':
         load_dataset = idun_datasets.LoadDataset(params)
         seqs_labels_path_pair = load_dataset.get_all_pairs()
-        params.num_subjects = load_dataset.num_subjects
-        print(f"[INFO] Number of subjects in dataset: {params.num_subjects}")
 
         # Load once!
         dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
@@ -117,7 +117,12 @@ def main(return_params=False):
         fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42))
 
         print(f"\n▶️ Using split: {len(train_idx)} train, {len(val_idx)} val, {len(test_idx)} test")
-
+        
+        if params.num_subjects_train < 0:      # leave CLI override untouched
+            params.num_subjects_train = dataset.num_subjects_train
+        # if params.num_nights_train < 0:
+        #     params.num_nights_train   = dataset.num_nights_train
+            
         train_set = torch.utils.data.Subset(dataset, train_idx)
         val_set = torch.utils.data.Subset(dataset, val_idx)
         test_set = torch.utils.data.Subset(dataset, test_idx)
