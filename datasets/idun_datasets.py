@@ -1,5 +1,3 @@
-# merged_idun_dataset.py
-
 import os
 import numpy as np
 import torch
@@ -56,6 +54,9 @@ class MemoryEfficientKFoldDataset(Dataset):
 
         print(f"[✅] Loaded total {len(self.samples)} valid samples from {len(seqs_labels_path_pair)} files.")
 
+    # Create a mapping for 4 classes
+    # Uncomment if you want to remap labels
+    
     # def remap_label(self, l):
     #     if l == 0:
     #         return 0  # Wake
