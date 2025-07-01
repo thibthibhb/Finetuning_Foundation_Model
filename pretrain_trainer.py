@@ -4,8 +4,12 @@ from ptflops import get_model_complexity_info
 from torch.nn import MSELoss
 from torchinfo import summary
 from tqdm import tqdm
-
+import os
 from utils.util import generate_mask
+import optuna
+from torch.utils.data import DataLoader
+from datasets.pretraining_dataset import PretrainingDataset
+from models.cbramod import CBraMod
 
 
 class Trainer(object):
@@ -54,9 +58,10 @@ class Trainer(object):
                 step_size_down=self.data_length*2, mode='exp_range', gamma=0.9, cycle_momentum=False
             )
 
-
     def train(self):
-        best_loss = 10000
+        self.train_loss_history = []
+        self.best_loss = 10000000
+        self.best_epoch = -1
         for epoch in range(self.params.epochs):
             losses = []
             for x in tqdm(self.data_loader, mininterval=10):
@@ -86,10 +91,80 @@ class Trainer(object):
                 self.optimizer_scheduler.step()
                 losses.append(loss.data.cpu().numpy())
             mean_loss = np.mean(losses)
+            self.train_loss_history.append(mean_loss)
             learning_rate = self.optimizer.state_dict()['param_groups'][0]['lr']
             print(f'Epoch {epoch+1}: Training Loss: {mean_loss:.6f}, Learning Rate: {learning_rate:.6f}')
-            if  mean_loss < best_loss:
-                model_path = rf'{self.params.model_dir}/epoch{epoch+1}_loss{mean_loss}.pth'
-                torch.save(self.model.state_dict(), model_path)
-                print("model save in " + model_path)
-                best_loss = mean_loss
+            # ✅ track best epoch
+            if mean_loss < self.best_loss:
+                self.best_loss = mean_loss
+                self.best_epoch = epoch + 1
+        print(f"\n🟢 Best Training Loss: {self.best_loss:.4f} at Epoch {self.best_epoch}")
+
+
+def objective(trial):
+    # 🔧 Sample hyperparameters
+    lr = trial.suggest_loguniform("lr", 1e-6, 1e-3)
+    weight_decay = trial.suggest_loguniform("weight_decay", 1e-6, 1e-2)
+    mask_ratio = trial.suggest_float("mask_ratio", 0.1, 0.6)
+    clip_value = trial.suggest_float("clip_value", 0.0, 1.0)
+    lr_scheduler = trial.suggest_categorical("lr_scheduler", [
+        "CosineAnnealingLR", "ExponentialLR", "StepLR", "MultiStepLR", "CyclicLR"
+    ])
+    dropout = trial.suggest_categorical("dropout", [0.0, 0.1, 0.2, 0.3])
+    batch_size = trial.suggest_categorical("batch_size", [64, 128, 256, 512, 1024])
+    epochs = trial.suggest_int("epochs", 10, 30)
+
+    # ⚙️ Params object
+    class Params:
+        def __init__(self):
+            self.lr = lr
+            self.weight_decay = weight_decay
+            self.mask_ratio = mask_ratio
+            self.clip_value = clip_value
+            self.lr_scheduler = lr_scheduler
+            self.cuda = 0
+            self.parallel = False
+            self.epochs = epochs
+            self.need_mask = True
+            self.model_dir = "./optuna_ckpts"
+            self.batch_size = batch_size
+            self.in_dim = 200
+            self.out_dim = 200
+            self.d_model = 200
+            self.dim_feedforward = 800
+            self.seq_len = 30
+            self.n_layer = 12
+            self.nhead = 8
+            self.dropout = dropout
+            self.dataset_dir = "Unlabelled/Sleep"
+
+    params = Params()
+
+    # 📦 Load dataset and model
+    dataset = PretrainingDataset(dataset_dir=params.dataset_dir)
+    dataloader = DataLoader(dataset, batch_size=params.batch_size, num_workers=8, shuffle=True)
+    model = CBraMod(params.in_dim, params.out_dim, params.d_model, params.dim_feedforward,
+                    params.seq_len, params.n_layer, params.nhead)
+
+    # 🚀 Train
+    trainer = Trainer(params, dataloader, model)
+    trainer.train()
+
+    # 🧠 Store trial metadata
+    trial.set_user_attr("best_loss", trainer.best_loss)
+    trial.set_user_attr("best_epoch", trainer.best_epoch)
+
+    # 🌍 Save global best model only
+    if not hasattr(objective, "global_best_loss"):
+        objective.global_best_loss = float("inf")
+
+    if trainer.best_loss < objective.global_best_loss:
+        objective.global_best_loss = trainer.best_loss
+        best_model_path = os.path.join(
+            params.model_dir, f"BEST__loss{trainer.best_loss:.2f}.pth"
+        )
+        torch.save(model.state_dict(), best_model_path)
+        trial.set_user_attr("model_path", best_model_path)
+        print(f"🌟 Saved new best model: {best_model_path}")
+
+    return trainer.best_loss

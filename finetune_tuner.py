@@ -18,19 +18,21 @@ def objective(trial, base_params):
     params.lr = trial.suggest_float("lr", 1e-5, 5e-3, log=True)
     params.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
     params.label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2, step=0.01)
-    params.dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.05)
-    params.batch_size = trial.suggest_categorical("batch_size", [512, 1024]) #128, 256, 
+    params.dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.05)
+    params.batch_size = trial.suggest_categorical("batch_size", [1024]) #512, 1024,
     params.clip_value = trial.suggest_float("clip_value", 0.1, 2.0)
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
     params.optimizer = trial.suggest_categorical("optimizer", ["AdamW","Lion"])
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
+    #params.data_ORP = trial.suggest_float("data_ORP", 0.1,0.2, step=0.1)
+    #params.noise = trial.suggest_categorical("noise", [0.0021196, 0.003154, 0.0034662, 0.068127, 0.083107, 0.12952, 0.21352, 0.29603]) 
 
     # Pretrained weights
     params.foundation_dir = trial.suggest_categorical(
         "foundation_dir", [
-            "optuna_ckpts/BEST__loss8698.99.pth",
-            # "optuna_ckpts/BEST__loss10527.31.pth",
+            #"optuna_ckpts/BEST__loss8698.99.pth",
+            "optuna_ckpts/BEST__loss10527.31.pth",
             # "optuna_ckpts/BEST__loss11060.72.pth",
             "pretrained_weights/pretrained_weights.pth"
             ]
@@ -40,12 +42,12 @@ def objective(trial, base_params):
     load_dataset = idun_datasets.LoadDataset(params)
     seqs_labels_path_pair = load_dataset.get_all_pairs()
     dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
-
-    fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42))
+    seed = trial.suggest_int("split_seed", 0, 10000)
+    fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=seed, orp_train_frac=params.data_ORP))
 
     print(f"\n▶️ Using fixed split — Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
     
-    if params.num_subjects_train < 0:      # leave CLI override untouched
+    if params.num_subjects_train < 0:    # leave CLI override untouched
         params.num_subjects_train = dataset.num_subjects_train
     # if params.num_nights_train < 0:
     #     params.num_nights_train   = dataset.num_nights_train
@@ -92,7 +94,7 @@ def run_optuna_tuning(params):
     best_trial = study.best_trial
     print("=== Top Trials by Test Kappa ===")
     sorted_trials = sorted(study.trials, key=lambda t: t.user_attrs.get("test_kappa", -1), reverse=True)
-    for i, trial in enumerate(sorted_trials[:5], 1):
+    for i, trial in enumerate(sorted_trials[:3], 1):
         print(f"Top {i} - Trial {trial.number} | Val Kappa: {trial.value:.4f} | Test Kappa: {trial.user_attrs.get('test_kappa'):.4f}")
         print(f"  ↪ Params: {trial.params}")
 

@@ -52,8 +52,8 @@ class Trainer(object):
                 backbone_params.append(param)
 
                 if params.frozen:
-                    for param in model.encoder.parameters():
-                        param.requires_grad = False
+                    for p in self.model.backbone.parameters():
+                        p.requires_grad = False
                 else:
                     param.requires_grad = True
             else:
@@ -329,6 +329,17 @@ class Trainer(object):
             print("***************************Test results************************")
             print("Test Evaluation: acc: {:.5f}, kappa: {:.5f}, f1: {:.5f}".format(acc, kappa, f1))
             print(cm)
+            
+            # === Sleep Recording Detection Logic ===
+            sleep_stages = [1, 2, 3, 4]  # Assuming classes: 0=Wake, 1=N1, 2=N2, 3=N3, 4=REM
+            y_pred_np = np.array(y_pred)
+            total_preds = len(y_pred_np)
+            sleep_preds = np.isin(y_pred_np, sleep_stages).sum()
+            sleep_ratio = sleep_preds / total_preds
+
+            is_sleep_recording = sleep_ratio > 0.70
+            print(f"🧠 Sleep Stage Prediction Ratio: {sleep_ratio:.2%}")
+            print("🛌 This is a sleep recording." if is_sleep_recording else "⚠️ This is NOT a sleep recording.")
 
             self.log_wandb_metrics({
                 "val_kappa": kappa_best,
@@ -345,8 +356,34 @@ class Trainer(object):
                 "num_datasets": getattr(self.params, 'num_datasets', None),
                 "dataset_names": ','.join(getattr(self.params, 'dataset_names', [])),
                 "epochs": self.params.epochs,
+                "frac_data_ORP_train": getattr(self.params, 'orp_train_frac', None),
             })
+            api = wandb.Api()
+            ENTITY = "thibaut_hasle-epfl"
+            PROJECT = "CBraMod-earEEG-tuning"
+            PLOT_DIR = "./Plot/figures"
 
+            runs = api.runs(f"{ENTITY}/{PROJECT}")
+            records = []
+            for run in runs:
+                summary = run.summary
+                config = run.config
+                name = run.name
+                records.append({
+                    "name": name,
+                    "test_kappa": summary.get("test_kappa"),
+                    "test_accuracy": summary.get("test_accuracy"),
+                    "test_f1": summary.get("test_f1"),
+                    "val_kappa": summary.get("val_kappa"),
+                    "hours_of_data": summary.get("hours_of_data"),
+                    "dataset_names": summary.get("dataset_names"),
+                    "num_subjects_train": summary.get("num_subjects_train"),
+                    "epochs": summary.get("epochs"),
+                    "scheduler": summary.get("scheduler"),
+                })
+
+            df = pd.DataFrame(records)
+            df.to_csv("experiment_summary.csv", index=False)
             if not os.path.isdir(self.params.model_dir):
                 os.makedirs(self.params.model_dir)
 

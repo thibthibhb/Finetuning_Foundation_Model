@@ -74,7 +74,9 @@ def main(return_params=False):
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
     parser.add_argument('--datasets', type=str, default='ORP', help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
     parser.add_argument('--scheduler', type=str, default='cosine', help='["cosine", "step", "none"]')
-
+    parser.add_argument('--data_ORP', type=float, default=0.1,
+                    help='Fraction of ORP data to use in training set (e.g., 0.1, 0.3, 0.5, 0.6)')
+    
     params = parser.parse_args()
     # Automatically compute number of datasets
     params.dataset_names = [name.strip() for name in params.datasets.split(',')]
@@ -105,7 +107,7 @@ def main(return_params=False):
         model = model_for_faced.Model(params)
         t = Trainer(params, data_loader, model)
         t.train_for_multiclass()
-        
+
     elif params.downstream_dataset == 'IDUN_EEG':
         load_dataset = idun_datasets.LoadDataset(params)
         seqs_labels_path_pair = load_dataset.get_all_pairs()
@@ -114,7 +116,7 @@ def main(return_params=False):
         dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair)
 
         # Use single subject-level split
-        fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42))
+        fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42, orp_train_frac=params.data_ORP))
 
         print(f"\n▶️ Using split: {len(train_idx)} train, {len(val_idx)} val, {len(test_idx)} test")
         

@@ -27,14 +27,13 @@ class Model(nn.Module):
 
         # Transformer encoder for sequence-level encoding
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=512, nhead=4, dim_feedforward=2048,
+            d_model=512, nhead=8, dim_feedforward=2048,
             batch_first=True, activation=F.gelu, norm_first=True)
         self.sequence_encoder = nn.TransformerEncoder(encoder_layer, num_layers=1, enable_nested_tensor=False)
         self.classifier = nn.Linear(512, param.num_of_classes)
-            
+
     def forward(self, x):
         bz, ch_num, seq_len, epoch_size = x.shape
-        
         x = x.contiguous().view(bz, ch_num, seq_len, epoch_size)
         epoch_features = self.backbone(x)
         epoch_features = epoch_features.contiguous().view(bz, -1)  # => [64, 6000]

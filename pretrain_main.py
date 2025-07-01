@@ -6,8 +6,10 @@ import torch
 from torch.utils.data import DataLoader
 from datasets.pretraining_dataset import PretrainingDataset
 from models.cbramod import CBraMod
-from pretrain_trainer import Trainer
+from pretrain_trainer import Trainer, objective
 import os
+import optuna
+
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -93,5 +95,10 @@ def main():
     torch.save(model.state_dict(), params.save_path)
     print(f"Final model saved at {params.save_path}")
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=50)
+
+    print("Best trial:")
+    print(f"  Value: {study.best_value}")
+    print(f"  Params: {study.best_params}")
