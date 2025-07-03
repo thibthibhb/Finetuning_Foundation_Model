@@ -79,7 +79,7 @@ def main(return_params=False):
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
     parser.add_argument('--datasets', type=str, default='ORP', help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
     parser.add_argument('--scheduler', type=str, default='cosine', help='["cosine", "step", "none"]')
-    parser.add_argument('--data_ORP', type=float, default=0.1,
+    parser.add_argument('--data_ORP', type=float, default=0.6,
                     help='Fraction of ORP data to use in training set (e.g., 0.1, 0.3, 0.5, 0.6)')
     
     params = parser.parse_args()

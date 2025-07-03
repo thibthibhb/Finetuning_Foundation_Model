@@ -15,13 +15,14 @@ os.makedirs(PLOT_DIR, exist_ok=True)
 api = wandb.Api()
 runs = api.runs(f"{ENTITY}/{PROJECT}")
 
-# === Collect run data ===
+# === Collect run data (updated with dataset_names) ===
 data = []
 for run in runs:
     if (
         run.state == "finished"
         and "test_on_2017" not in run.name
         and "normal_train_val_test_split" not in run.name
+        and "test_4class" not in run.name
     ):
         print(f"🔍 Processing run: {run.name}")
         row = dict(run.summary)
@@ -33,16 +34,23 @@ for run in runs:
         if match:
             row["orp_train_frac"] = float(match.group(1))
         elif "data_ORP" in row:
-            row["orp_train_frac"] = float(row["data_ORP"])  # fallback to config value
+            row["orp_train_frac"] = float(row["data_ORP"])
         else:
             print(f"⚠️ Skipping run (no ORP fraction found): {run.name}")
             continue
 
+        # Clean and sort dataset_names for consistent grouping
+        raw_datasets = run.config.get("dataset_names", [])
+        if isinstance(raw_datasets, str):
+            raw_datasets = [ds.strip() for ds in raw_datasets.split(",")]
+        dataset_names_cleaned = sorted(raw_datasets)
+        row["dataset_combo"] = "+".join(dataset_names_cleaned)
 
         data.append(row)
 
 # === Create DataFrame ===
 df = pd.DataFrame(data)
+
 
 # === Check what's available ===
 print("📋 Available columns in DataFrame:", df.columns.tolist())
@@ -72,36 +80,41 @@ if "hours_of_data" in df.columns:
     count_over_1000h = (df["hours_of_data"] > 1000).sum()
     print(f"🔍 Number of runs with more than 1000 hours of data: {count_over_1000h}")
 
-plt.figure(figsize=(10, 6))
-sns.set(style="whitegrid")
 
-# Make sure input is clean
-df_plot = df.dropna(subset=["orp_train_frac", "test_kappa", "num_datasets"])
+plt.figure(figsize=(14, 7))
+sns.set(style="whitegrid", font_scale=1.2)
 
-# Convert train fraction to string for grouping
-df_plot["orp_train_frac"] = df_plot["orp_train_frac"].astype(str)
+# Ensure categories are ordered
+combo_order = sorted(df["dataset_combo"].unique())
+df["dataset_combo"] = pd.Categorical(df["dataset_combo"], categories=combo_order, ordered=True)
 
-# Convert ORP train fraction to ordered categorical for proper sorting
-frac_order = sorted(df_plot["orp_train_frac"].unique())
-df_plot["orp_train_frac"] = pd.Categorical(df_plot["orp_train_frac"], categories=frac_order, ordered=True)
+# Normalize orp_train_frac into a visual-friendly scale (e.g., 0.1–0.6 → size range)
+# Optional: round to reduce legend clutter
+df["orp_train_frac"] = df["orp_train_frac"].round(2)
 
-# Boxplot
-sns.boxplot(
-    data=df_plot,
-    x="orp_train_frac",
+# Plot with marker size for orp_train_frac
+scatter = sns.scatterplot(
+    data=df,
+    x="hours_of_data",
     y="test_kappa",
-    hue="num_datasets",
-    palette="Set2"
+    hue="dataset_combo",
+    size="orp_train_frac",
+    sizes=(40, 300),  # min and max circle size
+    palette="colorblind",
+    alpha=0.7,
+    edgecolor="black",
+    linewidth=0.3
 )
 
-plt.title("📊 Test Kappa by ORP Train Fraction and # Datasets")
-plt.xlabel("ORP Train Fraction")
-plt.ylabel("Test Kappa")
-plt.legend(title="# Datasets", loc="best")
+# Final polish
+plt.title("Test Kappa vs Hours of Data by Dataset Combo\n(Circle Size = ORP Train Fraction)", fontsize=15)
+plt.xlabel("Total Hours of Data", fontsize=13)
+plt.ylabel("Test Kappa", fontsize=13)
+plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", title="Legend")
 plt.tight_layout()
 
-# Save to PNG
-output_path = os.path.join(PLOT_DIR, "boxplot_kappa_vs_orp_frac.png")
+# Save
+output_path = os.path.join(PLOT_DIR, "scatter_kappa_vs_hours_with_orp_frac_size.png")
 plt.savefig(output_path, dpi=300)
 print(f"✅ Plot saved to: {output_path}")
 plt.show()
