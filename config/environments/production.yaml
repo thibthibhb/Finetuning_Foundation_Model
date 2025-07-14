@@ -1,0 +1,94 @@
+# Production environment configuration
+# Inherits from base.yaml and overrides specific settings for production
+
+# Production training settings
+training:
+  epochs: 100
+  batch_size: 128
+  learning_rate: 0.0005
+  weight_decay: 0.05
+  
+  # Stricter early stopping for production
+  early_stopping:
+    enabled: true
+    patience: 15
+    min_delta: 0.01
+
+# Data configuration for production
+data:
+  num_workers: 16
+  
+  # Use full dataset in production
+  data_fraction: 1.0
+  
+  # Enable comprehensive data validation
+  validation:
+    integrity_checks: true
+    max_value_threshold: 1e6
+    variance_threshold: 0.0
+    
+  # Enable data augmentation in production
+  augmentation:
+    enabled: true
+
+# Experiment tracking for production
+experiment:
+  tracking:
+    enabled: true
+    project_name: "cbramod-prod"
+    
+  logging:
+    level: "INFO"
+    save_logs: true
+    
+  checkpointing:
+    enabled: true
+    save_best_only: true
+    save_frequency: 10
+
+# Paths for production (use absolute paths)
+paths:
+  datasets_dir: "${DATA_ROOT}/datasets"
+  model_dir: "${MODEL_ROOT}/saved_models"
+  log_dir: "${LOG_ROOT}/logs"
+  results_dir: "${RESULTS_ROOT}/results"
+  temp_dir: "/tmp/cbramod/prod"
+  cache_dir: "${CACHE_ROOT}/cache"
+
+# Device configuration for production
+device:
+  cuda:
+    enabled: true
+    device_id: 0
+    
+  # Enable distributed training in production
+  distributed:
+    enabled: false  # Set to true when using multiple GPUs
+    backend: "nccl"
+    
+  memory:
+    pin_memory: true
+    non_blocking: true
+
+# Security settings for production
+security:
+  enable_secure_mode: true
+  log_sensitive_data: false
+  
+# Performance optimization
+performance:
+  mixed_precision: true
+  gradient_checkpointing: false
+  compile_model: false  # Set to true for PyTorch 2.0+
+
+# Monitoring and alerting
+monitoring:
+  enabled: true
+  metrics_collection: true
+  health_checks: true
+  
+# Disable debug mode in production
+debug:
+  enabled: false
+  profiling: false
+  memory_profiling: false

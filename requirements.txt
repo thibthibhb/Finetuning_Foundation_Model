@@ -12,3 +12,6 @@ scipy
 torchinfo
 tqdm
 umap_learn
+seaborn
+optuna
+wandb

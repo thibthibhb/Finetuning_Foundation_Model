@@ -1,0 +1,156 @@
+# Base configuration for CBraMod
+# This file contains default settings that can be overridden by environment-specific configs
+
+# Project metadata
+project:
+  name: "CBraMod"
+  version: "1.0.0"
+  description: "A Criss-Cross Brain Foundation Model for EEG Decoding"
+
+# Model architecture
+model:
+  architecture: "cbramod"
+  backbone:
+    in_dim: 200
+    out_dim: 200
+    d_model: 200
+    dim_feedforward: 800
+    seq_len: 30
+    n_layer: 12
+    nhead: 8
+    dropout: 0.1
+  pretrained_weights:
+    enabled: true
+    path: "./cbramod/weights/pretrained_weights.pth"
+
+# Training configuration
+training:
+  # Basic training parameters
+  epochs: 100
+  batch_size: 512
+  learning_rate: 0.0005
+  weight_decay: 0.0
+  optimizer: "AdamW"
+  
+  # Advanced training settings
+  clip_value: 1.0
+  label_smoothing: 0.1
+  multi_lr: false
+  frozen: false
+  
+  # Scheduler settings
+  scheduler:
+    type: "cosine"
+    # Additional scheduler parameters can be added here
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.001
+
+# Data configuration
+data:
+  # Dataset settings
+  sample_rate: 200
+  num_workers: 8
+  
+  # Data augmentation
+  augmentation:
+    enabled: false
+    # Add specific augmentation parameters here
+  
+  # Data validation
+  validation:
+    integrity_checks: true
+    max_value_threshold: 1e6
+    variance_threshold: 0.0
+    
+  # Dataset splits
+  splits:
+    train: 0.60
+    val: 0.20
+    test: 0.20
+    
+  # Class handling
+  class_weights:
+    enabled: false
+    path: null
+  
+  weighted_sampler:
+    enabled: false
+
+# Experiment tracking
+experiment:
+  tracking:
+    enabled: true
+    backend: "wandb"
+    project_name: "cbramod-experiments"
+    
+  # Logging settings
+  logging:
+    level: "INFO"
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    save_logs: true
+    log_dir: "logs"
+    
+  # Checkpointing
+  checkpointing:
+    enabled: true
+    save_dir: "saved_models"
+    save_best_only: true
+    save_frequency: 5
+
+# Paths configuration
+paths:
+  # Data paths
+  datasets_dir: "Datasets/Final_dataset"
+  pretrained_weights_dir: "./cbramod/weights"
+  
+  # Output paths
+  model_dir: "saved_models"
+  log_dir: "logs"
+  results_dir: "results"
+  
+  # Temporary paths
+  temp_dir: "/tmp/cbramod"
+  cache_dir: "cache"
+
+# Device configuration
+device:
+  # GPU settings
+  cuda:
+    enabled: true
+    device_id: 0
+    
+  # Multi-GPU settings
+  distributed:
+    enabled: false
+    backend: "nccl"
+    
+  # Memory settings
+  memory:
+    pin_memory: true
+    non_blocking: true
+
+# Reproducibility
+reproducibility:
+  seed: 3407
+  deterministic: true
+  benchmark: false
+
+# Validation and testing
+validation:
+  # Metrics to compute
+  metrics:
+    - "accuracy"
+    - "kappa"
+    - "f1_score"
+    - "precision"
+    - "recall"
+    
+  # Cross-validation
+  cross_validation:
+    enabled: false
+    n_folds: 5
+    strategy: "stratified"

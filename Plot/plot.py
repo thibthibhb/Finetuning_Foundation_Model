@@ -57,7 +57,7 @@ print("📋 Available columns in DataFrame:", df.columns.tolist())
 print(f"📊 Number of runs collected: {len(df)}")
 
 # === Required columns check ===
-required_columns = ["test_kappa", "data_ORP", "hours_of_data", "num_datasets"]
+required_columns = ["test_kappa", "data_ORP", "num_datasets"]
 existing_columns = [col for col in required_columns if col in df.columns]
 missing_columns = [col for col in required_columns if col not in df.columns]
 
@@ -92,13 +92,19 @@ df["dataset_combo"] = pd.Categorical(df["dataset_combo"], categories=combo_order
 # Optional: round to reduce legend clutter
 df["orp_train_frac"] = df["orp_train_frac"].round(2)
 
+# === Keep only the best run per (dataset_combo, hours_of_data, orp_train_frac) ===
+group_cols = ["dataset_combo", "hours_of_data", "orp_train_frac"]
+df = df.sort_values("test_kappa", ascending=False)
+df = df.groupby(group_cols, as_index=False).first()
+print(f"✅ Filtered DataFrame to best test_kappa per {group_cols} – now {len(df)} rows")
+
 # Plot with marker size for orp_train_frac
 scatter = sns.scatterplot(
     data=df,
-    x="hours_of_data",
+    x="orp_train_frac",
     y="test_kappa",
     hue="dataset_combo",
-    size="orp_train_frac",
+    size="hours_of_data",
     sizes=(40, 300),  # min and max circle size
     palette="colorblind",
     alpha=0.7,
@@ -108,7 +114,7 @@ scatter = sns.scatterplot(
 
 # Final polish
 plt.title("Test Kappa vs Hours of Data by Dataset Combo\n(Circle Size = ORP Train Fraction)", fontsize=15)
-plt.xlabel("Total Hours of Data", fontsize=13)
+plt.xlabel("ORP fraction training set", fontsize=13)
 plt.ylabel("Test Kappa", fontsize=13)
 plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", title="Legend")
 plt.tight_layout()

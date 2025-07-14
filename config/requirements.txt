@@ -1,0 +1,23 @@
+# Configuration management requirements for CBraMod
+
+# Core dependencies
+PyYAML>=6.0
+pydantic>=1.10.0  # For advanced schema validation (optional)
+
+# Optional dependencies for enhanced functionality
+
+# AWS Secrets Manager support
+boto3>=1.26.0  # Optional: for AWS Secrets Manager backend
+
+# Encryption support
+cryptography>=3.4.0  # Optional: for encrypted file secrets backend
+
+# Advanced validation
+cerberus>=1.3.0  # Optional: for more sophisticated schema validation
+jsonschema>=4.0.0  # Optional: alternative schema validation
+
+# Environment file parsing (alternative implementation)
+python-dotenv>=0.19.0  # Optional: alternative .env file handling
+
+# Configuration file formats (additional)
+toml>=0.10.0  # Optional: TOML configuration support

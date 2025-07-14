@@ -1,1 +1,232 @@
-.idea
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Datasets - Don't push large dataset files
+Datasets/
+datasets/
+data/
+*.npz
+*.npy
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.pt
+*.pth
+*.tar.gz
+*.zip
+*.7z
+*.rar
+!requirements.txt
+
+# Model checkpoints and weights
+saved_models/
+checkpoints/
+weights/
+*.ckpt
+*.model
+*.bin
+pretrained_weights/
+optuna_ckpts/
+models/
+model.tar.gz
+inference.zip
+lambda_package.zip
+
+# Logs and monitoring
+logs/
+*.log
+wandb/
+mlruns/
+tensorboard/
+.mlflow/
+
+# Experiment tracking and results
+experiments/
+results/
+outputs/
+runs/
+optuna_studies/
+reproducibility/
+finetuning_report_*.json
+multi_run_results_*.json
+experiment_summary.csv
+
+# Cache directories
+.cache/
+cache/
+__pycache__/
+.pytest_cache/
+.coverage
+.tox/
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Configuration files with sensitive data
+.env
+.env.local
+.env.*.local
+config.json
+secrets.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+data_lineage.db
+data_quality_monitor.db
+
+# Version control
+.git/
+.gitattributes
+
+# Documentation build
+docs/_build/
+
+# Local development
+.local/
+local_*
+dev_*
+test_*
+
+# Plot/figure outputs
+Plot/figures/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.pdf
+*.svg
+!README_images/
+
+# Data pipeline outputs
+.data_versions.json
+
+# Environment and deployment specific
+deploy_prod/
+cbramod_deploy/
+*.key
+*.pem
+*.crt
+*.p12
+
+# Package files
+*.deb
+*.rpm
+*.msi
+*.dmg
+*.pkg
+
+# Backup files
+*.bak
+*.backup
+*.orig
+*.save
+
+# IDE specific
+.spyderproject
+.spyproject
+.ropeproject
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.testmondata
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Local configuration
+local_config.py
+local_settings.py
+
+# Keep important files
+!.gitignore
+!README.md
+!LICENSE
+!requirements.txt
+!setup.py
+!pyproject.toml
+!config/
+!examples/
+!QUICK_START_GUIDE.md
+!DATA_PIPELINE_README.md

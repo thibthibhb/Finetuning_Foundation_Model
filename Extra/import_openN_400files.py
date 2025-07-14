@@ -6,9 +6,9 @@ from scipy.signal import butter, filtfilt, iirnotch, resample
 
 #### I am around here: 5363b8a5-9df4-4e47-b77e-9a63ae566956/     ### of bucket run through 
 # ==== Configuration ====
-bucket_name = 'idn-prod-raw-recordings-bucket'
-sleep_root = '/root/cbramod/CBraMod/Unlabelled/Sleep'
-max_files = 400
+bucket_name = 'idn-dev-raw-recordings-bucket'
+sleep_root = '/root/cbramod/CBraMod/Unlabelled/Test'
+max_files = 2
 original_fs = 250
 target_fs = 200
 min_duration_hours = 3
@@ -39,7 +39,6 @@ print(f"Found {len(seen_sleep)} existing files in Sleep. Skipping those...")
 
 downloaded = 0
 sleep_copied = 0
-start_key = '5363b8a5-9df4-4e47-b77e-9a63ae566956/'
 
 for page in paginator.paginate(Bucket=bucket_name):
     if 'Contents' not in page:
@@ -47,10 +46,7 @@ for page in paginator.paginate(Bucket=bucket_name):
 
     for obj in page['Contents']:
         key = obj['Key']
-        
-        # 👇 Skip keys before the desired start point
-        if key < start_key:
-            continue
+  
 
         fname = os.path.basename(key)
 

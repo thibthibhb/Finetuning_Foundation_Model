@@ -1,0 +1,350 @@
+# Optimized configuration for CBraMod finetuning with pretrained weights
+# This configuration is specifically tuned for best finetuning performance
+
+# Model configuration
+model:
+  architecture: "cbramod"
+  pretrained_weights:
+    enabled: true
+    path: "./cbramod/weights/pretrained_weights.pth"  # Update this path
+  backbone:
+    in_dim: 200
+    out_dim: 200
+    d_model: 200
+    n_layer: 12
+    nhead: 8
+    dropout: 0.1
+    dim_feedforward: 800
+    seq_len: 30
+  num_of_classes: 5  # Will be auto-set based on classification_scheme
+  
+  # Classification Configuration
+  classification:
+    scheme: "5_class"  # Options: "4_class", "5_class"
+    auto_set_num_of_classes: true  # Automatically set num_of_classes based on scheme
+
+# Training configuration optimized for finetuning
+training:
+  epochs: 100
+  batch_size: 64
+  learning_rate: 0.0005  # Moderate LR for finetuning
+  weight_decay: 0.01
+  optimizer: "AdamW"
+  
+  # Enhanced finetuning features
+  adaptive_lr: true  # Different LRs for pretrained vs new layers
+  multi_lr: true
+  frozen: false  # Don't freeze backbone, allow fine-tuning
+  
+  # Learning rate scheduling
+  scheduler:
+    type: "cosine"
+    warmup_epochs: 10
+    min_lr_ratio: 0.01
+  
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 20
+    delta: 0.001
+    monitor: "val_kappa"
+  
+  # Regularization
+  label_smoothing: 0.1
+  clip_value: 1.0
+  
+  # Mixed precision training
+  use_amp: true
+  
+
+# Data configuration
+data:
+  sample_rate: 200
+  num_workers: 8
+  
+  # Enhanced data loading
+  weighted_sampler:
+    enabled: true  # Balance classes during training
+  
+  # Data augmentation
+  augmentation:
+    enabled: true
+    noise_level: 0.01
+    time_shift_max: 0.1
+  
+  # Validation strategy
+  validation:
+    split_ratio: 0.2
+    stratify: true
+    subject_level: true  # Prevent data leakage
+
+# Dataset configuration
+datasets:
+  datasets_dir: "Datasets/Final_dataset"
+  available_datasets: ["ORP", "2017_Open_N", "2019_Open_N", "2023_Open_N"]
+  default_datasets: ["ORP"]  # Default selection
+  orp_train_fraction: 0.6
+  
+  # Dataset-specific configurations
+  dataset_weights:  # For weighted sampling across datasets
+    ORP: 1.0
+    2017_Open_N: 0.6
+    2019_Open_N: 0.8
+    2023_Open_N: 0.8
+  
+  # Advanced dataset mixing
+  mixing_strategy: "balanced"  # "balanced", "weighted", "stratified"
+
+# Device configuration
+device:
+  cuda:
+    enabled: true
+    device_id: 0
+  distributed:
+    enabled: false
+    backend: "nccl"
+  memory:
+    pin_memory: true
+    non_blocking: true
+
+# Reproducibility
+reproducibility:
+  seed: 42
+  deterministic_algorithms: true
+  benchmark_cudnn: false
+
+# Paths
+paths:
+  datasets_dir: "Datasets/Final_dataset"
+  model_dir: "saved_models"
+  log_dir: "logs"
+  results_dir: "results"
+
+# Experiment tracking
+experiment:
+  tracking:
+    enabled: true
+    backends: ["wandb", "local"]
+  
+  wandb:
+    project: "cbramod-finetuning"
+    entity: null  # Set your wandb entity
+    mode: "online"
+    log_freq: 10
+
+# Validation thresholds for quality checks
+validation:
+  accuracy_threshold: 0.65
+  kappa_threshold: 0.55
+  f1_threshold: 0.50
+  
+  # EEG-specific validation
+  eeg_validation:
+    max_amplitude: 1000  # µV
+    min_variance_threshold: 0.01
+    artifact_threshold: 500  # µV
+    nan_tolerance: 0.0
+
+# Model selection criteria
+model_selection:
+  primary_metric: "kappa"
+  secondary_metrics: ["accuracy", "f1_score"]
+  minimize: false  # Higher is better for kappa
+
+# Comprehensive logging configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  save_to_file: true
+  
+  # Advanced logging features
+  structured:
+    enabled: true
+    format: "json"  # "json" or "text"
+    include_context: true
+    include_performance: true
+    
+  # Multiple log destinations
+  handlers:
+    console:
+      enabled: true
+      level: "INFO"
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file:
+      enabled: true
+      level: "DEBUG"
+      path: "logs/cbramod_detailed.log"
+      max_size: "100MB"
+      backup_count: 5
+    experiment:
+      enabled: true
+      level: "INFO"
+      path: "logs/experiments.log"
+      filter_pattern: "experiment|trial|hyperopt"
+    error:
+      enabled: true
+      level: "ERROR"
+      path: "logs/errors.log"
+      
+  # Performance monitoring
+  performance:
+    enabled: true
+    log_memory_usage: true
+    log_gpu_usage: true
+    log_timing: true
+    sample_interval: 30  # seconds
+  
+# Advanced training strategies
+advanced:
+  # Gradient accumulation for effective larger batch sizes
+  gradient_accumulation_steps: 1
+  
+  # Layer-wise Learning Rate Decay (LLRD)
+  llrd:
+    enabled: true
+    decay_rate: 0.9  # Each lower layer gets 90% of upper layer's LR
+  
+  # Progressive Layer Unfreezing
+  progressive_unfreezing:
+    enabled: true
+    schedule:
+      5: ["head"]  # Unfreeze head at epoch 5
+      10: ["backbone.transformer_encoder.layers.11"]  # Unfreeze top layer
+      15: ["backbone.transformer_encoder.layers.10"]
+      20: ["backbone.transformer_encoder.layers.9"]
+      25: ["backbone"]  # Unfreeze all at epoch 25
+  
+  # Advanced EEG Data Augmentation
+  augmentation:
+    enabled: true
+    temporal_masking:
+      enabled: true
+      mask_prob: 0.1
+    frequency_masking:
+      enabled: true
+      mask_prob: 0.1
+    mixup:
+      enabled: true
+      alpha: 0.2
+    gaussian_noise:
+      enabled: true
+      noise_level: 0.01
+  
+  # Curriculum Learning
+  curriculum_learning:
+    enabled: false  # Requires pre-computed difficulty scores
+    curriculum_epochs: 20
+  
+  # Memory Optimization
+  memory_optimization:
+    gradient_checkpointing: true
+    mixed_precision: true
+    optimize_for_inference: false
+  
+  # Model Compression (for deployment)
+  compression:
+    quantization:
+      enabled: false
+      backend: "fbgemm"  # or "qnnpack"
+    pruning:
+      enabled: false
+      ratio: 0.2
+    onnx_export:
+      enabled: false
+      output_path: "models/model.onnx"
+  
+  # Advanced Optimization
+  optimization:
+    use_sam: false  # Sharpness-Aware Minimization
+    sam_rho: 0.05
+    gradient_centralization: true
+    lookahead: false
+  
+  # Learning rate finder
+  lr_finder:
+    enabled: false
+    start_lr: 1e-8
+    end_lr: 1e-1
+    num_steps: 100
+  
+  # Model checkpointing
+  checkpointing:
+    save_best: true
+    save_last: true
+    save_every_n_epochs: 10
+    monitor: "val_kappa"
+  
+  # Hyperparameter optimization
+  hyperopt:
+    enabled: true
+    backend: "optuna"
+    n_trials: 20
+    max_epochs_per_trial: 50  # Limit epochs for faster tuning
+    pruning:
+      enabled: true
+      n_startup_trials: 3
+      n_warmup_steps: 5
+      interval_steps: 5
+    search_space:
+      learning_rate: [1e-5, 5e-3]
+      batch_size: [512, 1024]
+      weight_decay: [1e-6, 1e-2]
+      label_smoothing: [0.0, 0.3]
+      adaptive_lr: [true, false]
+      optimizer: ["AdamW", "Lion"]
+      scheduler: ["cosine"]
+      data_ORP: [0.5, 0.6]
+    
+    # Parameter validation and constraints
+    validation:
+      max_epochs_per_trial: 50
+      min_kappa_threshold: 0.05  # Prune trials below this kappa
+      early_stopping_patience: 10  # Stop poor trials early
+      
+    # Configurable magic numbers for search space generation
+    search_ranges:
+      # Learning rate multipliers when not in config
+      lr_multiplier_range: [0.1, 10.0]  # default_lr * [0.1, 10.0]
+      
+      # Weight decay multipliers when not in config
+      wd_multiplier_range: [0.01, 10.0]  # default_wd * [0.01, 10.0]
+      
+      # Batch size multipliers when not in config
+      batch_size_factors: [0.5, 1.0, 2.0]  # default_batch * [0.5, 1.0, 2.0]
+      
+      # Label smoothing settings
+      label_smoothing_multiplier: 3.0  # default_ls * 3.0
+      label_smoothing_step: 0.05
+      
+      # Clip value settings
+      clip_value_range: [0.5, 2.0]  # [min, max(2.0, default_clip * 2)]
+      clip_value_step: 0.1
+      
+      # ORP fraction settings
+      orp_fraction_delta: 0.3  # default_orp ± 0.3
+      orp_fraction_step: 0.1
+      
+      # Early stopping settings
+      early_stopping_patience_factor: [0.5, 2.0]  # default_patience * [0.5, 2.0]
+      early_stopping_patience_step: 5
+      early_stopping_delta_multiplier: [0.1, 10.0]  # default_delta * [0.1, 10.0]
+      
+      # Split seed range
+      split_seed_range: [0, 10000]
+      
+      # Plateau scheduler settings
+      plateau_factor_range: [0.3, 0.8]
+      plateau_factor_step: 0.1
+      plateau_patience_range: [5, 15]
+      
+    # Memory optimization settings
+    memory_optimization:
+      enabled: true
+      gradient_checkpointing: true
+      mixed_precision: true
+      reduce_batch_size_on_oom: true
+      max_batch_size_reduction_attempts: 3
+      
+    # Execution settings
+    execution:
+      timeout_per_trial: 3600  # 1 hour timeout per trial
