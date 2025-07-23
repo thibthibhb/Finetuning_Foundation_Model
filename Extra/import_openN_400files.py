@@ -8,10 +8,10 @@ from scipy.signal import butter, filtfilt, iirnotch, resample
 # ==== Configuration ====
 bucket_name = 'idn-dev-raw-recordings-bucket'
 sleep_root = '/root/cbramod/CBraMod/Unlabelled/Test'
-max_files = 2
+max_files = 25
 original_fs = 250
 target_fs = 200
-min_duration_hours = 3
+min_duration_hours = 7
 min_duration_sec = min_duration_hours * 3600
 
 os.makedirs(sleep_root, exist_ok=True)

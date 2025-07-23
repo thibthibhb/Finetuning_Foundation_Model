@@ -190,7 +190,7 @@ class CBraModLogger:
         if not config.get('enabled', True):
             return
         
-        log_path = Path(config.get('path', 'logs/cbramod_detailed.log'))
+        log_path = Path(config.get('path', 'artifacts/logs/cbramod_detailed.log'))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
         handler = logging.FileHandler(log_path)
@@ -209,7 +209,7 @@ class CBraModLogger:
         if not config.get('enabled', True):
             return
         
-        log_path = Path(config.get('path', 'logs/experiments.log'))
+        log_path = Path(config.get('path', 'artifacts/logs/experiments.log'))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
         class ExperimentFilter(logging.Filter):
@@ -234,7 +234,7 @@ class CBraModLogger:
         if not config.get('enabled', True):
             return
         
-        log_path = Path(config.get('path', 'logs/errors.log'))
+        log_path = Path(config.get('path', 'artifacts/logs/errors.log'))
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
         handler = logging.FileHandler(log_path)
