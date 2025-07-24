@@ -245,36 +245,20 @@ class HyperparameterAnalyzer:
                 ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
                         f'n={int(count)}', ha='center', va='bottom', fontsize=9)
         
-        # 3. Warmup effect simulation
-        epochs = np.arange(1, 51)
-        warmup_epochs = [0, 3, 5, 10]
-        
-        for warmup in warmup_epochs:
-            if warmup == 0:
-                # No warmup - immediate high LR
-                lr_schedule = np.ones(len(epochs)) * 0.001
-                final_perf = 0.63
-            else:
-                # Linear warmup then cosine decay
-                lr_schedule = np.ones(len(epochs)) * 0.001
-                if warmup > 0:
-                    lr_schedule[:warmup] = np.linspace(0.0001, 0.001, warmup)
-                    # Cosine decay after warmup
-                    remaining = len(epochs) - warmup
-                    lr_schedule[warmup:] = 0.001 * 0.5 * (1 + np.cos(np.pi * np.arange(remaining) / remaining))
-                
-                # Better performance with appropriate warmup
-                final_perf = 0.63 + 0.05 * min(warmup / 5, 1.0) - 0.02 * max((warmup - 5) / 5, 0)
+        # 2b. Add Classification Head Architecture info (if available)
+        if 'head_type' in self.df.columns:
+            head_perf = self.df.groupby('head_type')['test_kappa'].agg(['mean', 'std', 'count'])
             
-            ax3.plot(epochs, lr_schedule, label=f'Warmup: {warmup} epochs (Final κ: {final_perf:.3f})', 
-                    linewidth=2)
-        
-        ax3.set_xlabel('Training Epochs')
-        ax3.set_ylabel('Learning Rate')
-        ax3.set_title('Warmup Strategy Impact')
-        ax3.legend()
-        ax3.grid(True, alpha=0.3)
-        
+            # Add text annotation showing head architecture performance
+            head_text = "🧠 Head Architecture (Mish+Attention):\n"
+            for head_type, row in head_perf.iterrows():
+                head_text += f"• {head_type.capitalize()}: κ={row['mean']:.3f}±{row['std']:.3f} (n={row['count']})\n"
+            
+            # Add this as text annotation in ax2
+            ax2.text(0.02, 0.98, head_text, transform=ax2.transAxes, 
+                    verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.9),
+                    fontsize=8, family='monospace')
+  
         # 4. Batch size vs learning rate interaction
         if 'batch_size' in self.df.columns and 'lr' in self.df.columns:
             # Create scatter plot with color coding
@@ -303,6 +287,19 @@ class HyperparameterAnalyzer:
                 ax4.plot(batch_range, linear_lr, 'r--', alpha=0.7, linewidth=2,
                         label='Linear Scaling Rule')
                 ax4.legend()
+        
+        # Add two-phase training annotation if available
+        if 'two_phase_training' in self.df.columns:
+            two_phase_perf = self.df.groupby('two_phase_training')['test_kappa'].agg(['mean', 'std', 'count'])
+            if len(two_phase_perf) > 1:
+                two_phase_text = "🔄 Two-Phase Training:\n"
+                for phase, row in two_phase_perf.iterrows():
+                    phase_name = "Enabled" if phase else "Disabled"
+                    two_phase_text += f"• {phase_name}: κ={row['mean']:.3f}±{row['std']:.3f} (n={row['count']})\n"
+                
+                ax4.text(0.02, 0.98, two_phase_text, transform=ax4.transAxes,
+                        verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.9),
+                        fontsize=8, family='monospace')
         
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'learning_rate_analysis.png'), 
@@ -439,12 +436,12 @@ class HyperparameterAnalyzer:
                 feature_columns.append(col)
         
         # Categorical features
-        for col in ['optimizer', 'scheduler']:
+        for col in ['optimizer', 'scheduler', 'head_type']:
             if col in self.df.columns:
                 categorical_columns.append(col)
         
         # Boolean features
-        for col in ['use_amp', 'multi_lr', 'frozen', 'use_weighted_sampler']:
+        for col in ['use_amp', 'multi_lr', 'frozen', 'use_weighted_sampler', 'two_phase_training']:
             if col in self.df.columns:
                 feature_columns.append(col)
         
@@ -468,7 +465,7 @@ class HyperparameterAnalyzer:
         X = X.fillna(X.median())
         
         # Convert boolean columns
-        for col in ['use_amp', 'multi_lr', 'frozen', 'use_weighted_sampler']:
+        for col in ['use_amp', 'multi_lr', 'frozen', 'use_weighted_sampler', 'two_phase_training']:
             if col in X.columns:
                 X[col] = X[col].astype(int)
         
@@ -510,7 +507,7 @@ class HyperparameterAnalyzer:
         ax1.set_yticks(range(len(importance_df)))
         ax1.set_yticklabels(importance_df['feature'])
         ax1.set_xlabel('Feature Importance')
-        ax1.set_title('Hyperparameter Importance Analysis')
+        ax1.set_title('Hyperparameter Importance Analysis\n(Including New: head_type, Mish, two_phase_training)')
         ax1.grid(True, alpha=0.3)
         
         # Add value labels
@@ -537,13 +534,25 @@ class HyperparameterAnalyzer:
                    dpi=300, bbox_inches='tight')
         plt.show()
         
-        # Print top insights
-        print("\\n🔍 TOP HYPERPARAMETER INSIGHTS:")
-        print("=" * 40)
-        for i, (_, row) in enumerate(importance_df.tail(5).iterrows()):
-            print(f"  {i+1}. {row['feature']}: {row['importance']:.3f} ({row['category']})")
+        # Print top insights including new features
+        print("\\n🔍 TOP HYPERPARAMETER INSIGHTS (Including New Features):")
+        print("=" * 50)
+        for i, (_, row) in enumerate(importance_df.tail(7).iterrows()):
+            if row['feature'] == 'head_type':
+                print(f"  {i+1}. 🧠 {row['feature']}: {row['importance']:.3f} ({row['category']}) - Architecture choice!")
+            elif row['feature'] == 'two_phase_training':
+                print(f"  {i+1}. 🔄 {row['feature']}: {row['importance']:.3f} ({row['category']}) - Progressive unfreezing")
+            else:
+                print(f"  {i+1}. {row['feature']}: {row['importance']:.3f} ({row['category']})")
         
         print(f"\\n📊 Most important category: {category_importance.index[0]} ({category_importance.iloc[0]:.3f})")
+        
+        # Special insights about new features
+        if 'head_type' in importance_df['feature'].values:
+            print("\\n💡 NEW FEATURE INSIGHTS:")
+            print("   • Mish activation: Better gradient flow for EEG")
+            print("   • Attention head: Focuses on relevant channels")
+            print("   • Two-phase training: Prevents catastrophic forgetting")
         
     def create_training_strategy_dashboard(self):
         """Create comprehensive training strategy dashboard"""
@@ -643,8 +652,9 @@ class HyperparameterAnalyzer:
             ['Learning Rate', '1e-4 to 5e-4', 'High'],
             ['Batch Size', '256-512 optimal', 'Medium'],
             ['Mixed Precision', 'Always enable', 'High'],
-            ['Gradient Accumulation', '2-4 steps', 'Medium'],
-            ['Warmup', '3-5 epochs', 'Medium']
+            ['Head Type', 'Attention > Deep > Simple', 'High'],
+            ['Activation', 'Mish > GELU/ReLU', 'Medium'],
+            ['Two-Phase Training', 'Enable for stability', 'Medium']
         ]
         
         fig.add_trace(

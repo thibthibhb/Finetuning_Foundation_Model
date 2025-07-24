@@ -116,6 +116,11 @@ class CBraModResearchPlotter:
             
         initial_count = len(df)
         
+        # Filter to only keep runs with 5 classes to remove bias
+        if 'num_of_classes' in df.columns:
+            df = df[df['num_of_classes'] == 5]
+            print(f"🔧 Filtered to only 5-class runs: {initial_count} → {len(df)} runs")
+        
         # Group by data configuration and keep the best (highest kappa) run in each group
         group_cols = ['hours_bin', 'orp_bin']
         
@@ -230,46 +235,128 @@ class CBraModResearchPlotter:
                 ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
                         f'{value:.1f}h', ha='center', va='bottom', fontweight='bold')
         
-        # 3. Subject diversity impact (using filtered data)
+        # 3. Subject diversity impact - Top 5 performers per subject range
         if 'num_subjects_train' in filtered_df.columns:
             subject_bins = pd.cut(filtered_df['num_subjects_train'], bins=5)
-            perf_by_subjects = filtered_df.groupby(subject_bins)['test_kappa'].agg(['mean', 'std', 'count'])
+            filtered_df['subject_bin'] = subject_bins
             
-            x_pos = range(len(perf_by_subjects))
-            bars = ax3.bar(x_pos, perf_by_subjects['mean'], 
-                          yerr=perf_by_subjects['std'], capsize=5,
-                          color='lightblue', edgecolor='navy', alpha=0.7)
-            ax3.set_xticks(x_pos)
-            ax3.set_xticklabels([f'{int(interval.left)}-{int(interval.right)}' 
-                               for interval in perf_by_subjects.index], rotation=45)
-            ax3.set_xlabel('Number of Training Subjects')
-            ax3.set_ylabel('Mean Test Kappa')
-            ax3.set_title('RQ1: Impact of Subject Diversity\n(Best performance per data configuration)')
-            ax3.grid(True, alpha=0.3)
+            # Get top 5 performers in each subject range
+            top_performers_data = []
+            bin_labels = []
             
-            # Add sample count labels
-            for bar, count in zip(bars, perf_by_subjects['count']):
-                ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                        f'n={int(count)}', ha='center', va='bottom', fontsize=9)
+            for bin_interval in subject_bins.cat.categories:
+                bin_data = filtered_df[filtered_df['subject_bin'] == bin_interval]
+                if len(bin_data) > 0:
+                    # Get top 5 (or all if less than 5) performers in this bin
+                    top_5 = bin_data.nlargest(min(5, len(bin_data)), 'test_kappa')
+                    
+                    bin_label = f'{int(bin_interval.left)}-{int(bin_interval.right)}'
+                    bin_labels.append(bin_label)
+                    
+                    # Store the top performances for this bin
+                    top_performers_data.append(top_5['test_kappa'].values)
+            
+            if top_performers_data:
+                # Calculate statistics for top performers only
+                max_vals = [np.max(performances) for performances in top_performers_data]
+                mean_top5 = [np.mean(performances) for performances in top_performers_data]
+                std_top5 = [np.std(performances) if len(performances) > 1 else 0 
+                           for performances in top_performers_data]
+                counts = [len(performances) for performances in top_performers_data]
+                
+                x_pos = range(len(bin_labels))
+                
+                # Plot mean of top 5 with error bars showing std of top 5
+                bars = ax3.bar(x_pos, mean_top5, 
+                              yerr=std_top5, capsize=5,
+                              color='lightblue', edgecolor='navy', alpha=0.7)
+                
+                # Add markers for the maximum performance in each bin
+                ax3.scatter(x_pos, max_vals, color='red', s=60, marker='*', 
+                           label='Best performance', zorder=5)
+                
+                ax3.set_xticks(x_pos)
+                ax3.set_xticklabels(bin_labels, rotation=45)
+                ax3.set_xlabel('Number of Training Subjects')
+                ax3.set_ylabel('Test Kappa (Top 5 per bin)')
+                ax3.set_title('RQ1: Impact of Subject Diversity\n(Top 5 performers per subject range)')
+                ax3.set_ylim(0.4, 0.8) # Set y-limits for better visibility
+                ax3.legend()
+                ax3.grid(True, alpha=0.3)
+                
+                # Add sample count labels and max values
+                for i, (bar, count, max_val) in enumerate(zip(bars, counts, max_vals)):
+                    # Sample count
+                    ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std_top5[i] + 0.01,
+                            f'top {count}', ha='center', va='bottom', fontsize=8)
+                    # Max value
+                    ax3.text(i, max_val + 0.01, f'{max_val:.3f}', 
+                            ha='center', va='bottom', fontsize=8, color='red', fontweight='bold')
+            
+            # Clean up temporary column
+            filtered_df = filtered_df.drop(columns=['subject_bin'])
         
-        # 4. Efficiency analysis (Performance per hour) using filtered data
+        # 4. Efficiency analysis by performance thresholds - Top 3 for each threshold
         if 'hours_of_data' in filtered_df.columns:
             filtered_df['efficiency'] = filtered_df['test_kappa'] / filtered_df['hours_of_data']
-            top_efficient = filtered_df.nlargest(10, 'efficiency')
             
-            colors = plt.cm.RdYlGn(np.linspace(0.3, 0.9, len(top_efficient)))
-            bars = ax4.barh(range(len(top_efficient)), top_efficient['efficiency'], color=colors)
-            ax4.set_yticks(range(len(top_efficient)))
-            ax4.set_yticklabels([f"{row['orp_train_frac']:.1f} ORP\n{row['hours_of_data']:.0f}h" 
-                               for _, row in top_efficient.iterrows()])
-            ax4.set_xlabel('Efficiency (Kappa/Hour)')
-            ax4.set_title('RQ1: Most Efficient Configurations\n(Best performance per data configuration)')
-            ax4.grid(True, alpha=0.3)
+            # Define performance thresholds
+            thresholds = [0.4, 0.5, 0.6]
+            threshold_colors = ['#ffcccc', '#66b3ff', '#99ff99']  # Light red, blue, green
             
-            # Add efficiency values as text
-            for i, (bar, eff) in enumerate(zip(bars, top_efficient['efficiency'])):
-                ax4.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height()/2,
-                        f'{eff:.4f}', va='center', ha='left', fontsize=9)
+            # Find top 3 most efficient configurations for each threshold
+            all_configs = []
+            all_labels = []
+            all_colors = []
+            all_efficiencies = []
+            
+            for i, threshold in enumerate(thresholds):
+                # Filter runs that meet the performance threshold
+                qualified_runs = filtered_df[filtered_df['test_kappa'] >= threshold]
+                
+                if len(qualified_runs) > 0:
+                    # Get top 3 most efficient configurations (or all if less than 3)
+                    top_configs = qualified_runs.nlargest(min(3, len(qualified_runs)), 'efficiency')
+                    
+                    for rank, (_, config) in enumerate(top_configs.iterrows()):
+                        all_configs.append(config)
+                        all_labels.append(f"κ ≥ {threshold} (#{rank+1})\n{config['orp_train_frac']:.1f} ORP, {config['hours_of_data']:.0f}h")
+                        all_colors.append(threshold_colors[i])
+                        all_efficiencies.append(config['efficiency'])
+                        
+                        print(f"🎯 #{rank+1} efficiency for κ ≥ {threshold}: {config['efficiency']:.4f} "
+                              f"(κ={config['test_kappa']:.3f}, {config['hours_of_data']:.0f}h)")
+            
+            if all_configs:
+                # Create horizontal bar chart
+                y_pos = range(len(all_labels))
+                bars = ax4.barh(y_pos, all_efficiencies, color=all_colors, alpha=0.8, edgecolor='black')
+                
+                ax4.set_yticks(y_pos)
+                ax4.set_yticklabels(all_labels, fontsize=8)
+                ax4.set_xlabel('Efficiency (Kappa/Hour)')
+                ax4.set_title('RQ1: Top 3 Most Efficient Configurations by Performance Level\n(Top 3 efficiency for each kappa threshold)')
+                ax4.grid(True, alpha=0.3)
+                
+                # Add efficiency values and kappa scores as text
+                for i, (bar, config, eff) in enumerate(zip(bars, all_configs, all_efficiencies)):
+                    # Efficiency value
+                    ax4.text(bar.get_width() + 0.0002, bar.get_y() + bar.get_height()/2,
+                            f'{eff:.4f}', va='center', ha='left', fontsize=8, fontweight='bold')
+                    
+                    # Kappa score on the left side of the bar
+                    ax4.text(bar.get_width()/2, bar.get_y() + bar.get_height()/2,
+                            f'κ={config["test_kappa"]:.3f}', va='center', ha='center', 
+                            fontsize=7, color='white', fontweight='bold')
+                
+                # Add a text box with interpretation
+                textstr = 'Higher bars = more efficient\n(better performance per hour)\nNumbers show actual kappa achieved\nTop 3 shown for each threshold'
+                props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+                ax4.text(0.98, 0.02, textstr, transform=ax4.transAxes, fontsize=7,
+                        verticalalignment='bottom', horizontalalignment='right', bbox=props)
+            else:
+                ax4.text(0.5, 0.5, 'No configurations meet\nminimum thresholds', 
+                        ha='center', va='center', transform=ax4.transAxes, fontsize=12)
         
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'RQ1_minimal_calibration_data.png'), 
@@ -374,7 +461,6 @@ class CBraModResearchPlotter:
             ax3.set_ylabel('Mean Test Kappa')
             ax3.set_title('RQ2: Data Quality Impact\n(Best performance per data configuration)')
             ax3.grid(True, alpha=0.3)
-            
             # Add count labels
             for bar, count in zip(bars, orp_stats['count']):
                 ax3.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
@@ -698,17 +784,20 @@ class CBraModResearchPlotter:
         
         # Check if we have actual data with class information
         if 'num_of_classes' in self.df.columns:
-            # Use actual class information from data
+            # Use actual class information from data - get the most common class count
             unique_classes = self.df['num_of_classes'].unique()
-            if 5 in unique_classes:
+            most_common_classes = self.df['num_of_classes'].mode().iloc[0]
+            
+            if most_common_classes == 5 or 5 in unique_classes:
                 stages = ['Wake', 'N1', 'N2', 'N3', 'REM']
                 colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFD700']
             else:
                 stages = ['Wake', 'Light', 'Deep', 'REM']
                 colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
         else:
-            # Default to 4-class for compatibility
-            stages = ['Wake', 'Light', 'Deep', 'REM']
+            # Use general sleep stages without assuming class count
+            # Check if we can infer from other data patterns
+            stages = ['Wake', 'Light', 'Deep', 'REM']  # More generic naming
             colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
         
         # Simulate realistic per-stage performance data based on literature

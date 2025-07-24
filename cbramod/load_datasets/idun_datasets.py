@@ -150,7 +150,8 @@ def get_custom_split(dataset, n_splits=3, seed=42, orp_train_frac=0.6):
 
     n = len(orp_subjects)
     n_train = round(orp_train_frac * n)
-    n_val = round(0.20 * n)
+    x = n - n_train
+    n_val = round(x/2)
 
     orp_train_subjects = orp_subjects[:n_train]
     orp_val_subjects = orp_subjects[n_train:n_train + n_val]

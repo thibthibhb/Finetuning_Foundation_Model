@@ -299,7 +299,7 @@ def analyze_hyperparameter_importance(df):
     # Prepare features for analysis
     feature_columns = [
         'lr', 'batch_size', 'weight_decay', 'dropout', 'clip_value',
-        'warmup_epochs', 'orp_train_frac', 'hours_of_data', 'num_subjects_train', 'epochs',
+        'head_type', 'orp_train_frac', 'hours_of_data', 'num_subjects_train', 'epochs',
         'label_smoothing', 'sample_rate',
         'use_amp', 'frozen', 'multi_lr', 'use_weighted_sampler'
     ] #'optimizer', 'scheduler'
@@ -339,7 +339,7 @@ def analyze_hyperparameter_importance(df):
     # Classify feature types for research insights
     data_features = ['hours_of_data', 'num_subjects_train', 'orp_train_frac']
     training_features = ['lr', 'batch_size', 'weight_decay', 'dropout', 'epochs']
-    optimization_features = ['warmup_epochs', 'clip_value']
+    optimization_features = ['head_type', 'clip_value']
     
     for idx, row in importance_df.iterrows():
         if row['feature'] in data_features:

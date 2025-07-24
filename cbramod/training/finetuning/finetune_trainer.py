@@ -8,6 +8,7 @@ try:
 except ImportError:
     from finetune_evaluator import Evaluator
 from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss, MSELoss
+import torch.nn.functional as F
 from timeit import default_timer as timer
 import numpy as np
 import matplotlib.pyplot as plt
@@ -57,6 +58,41 @@ except ImportError:
         def __init__(self, *args, **kwargs): pass
         def __enter__(self): return self
         def __exit__(self, *args, **kwargs): pass
+
+
+class FocalLoss(nn.Module):
+    """Focal Loss implementation for imbalanced classification
+    
+    Focal Loss down-weights easy examples and focuses on hard examples,
+    helping with class imbalance issues in EEG sleep staging.
+    
+    Reference: Lin et al. "Focal Loss for Dense Object Detection" (2017)
+    Application: Improved N1 and REM recall for sleep staging
+    """
+    def __init__(self, alpha=1.0, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        
+    def forward(self, inputs, targets):
+        # Compute cross entropy
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        
+        # Compute p_t
+        pt = torch.exp(-ce_loss)
+        
+        # Compute focal loss
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+
 class Trainer(object):
     def __init__(self, params, data_loader, model):
         self.params = params
@@ -70,8 +106,14 @@ class Trainer(object):
         self.model = model.to(device)
         self.device = device
         
+        # Loss function selection - Focal Loss for imbalanced EEG data or standard losses
         if getattr(self.params, 'downstream_dataset', 'IDUN_EEG') in ['FACED', 'SEED-V', 'PhysioNet-MI', 'ISRUC', 'BCIC2020-3', 'TUEV', 'BCIC-IV-2a', 'IDUN_EEG']:
-            self.criterion = CrossEntropyLoss(label_smoothing=getattr(self.params, 'label_smoothing', 0.0)).to(device)
+            if getattr(self.params, 'use_focal_loss', False):
+                # Focal Loss for imbalanced sleep staging - helps with N1 and REM recall
+                focal_gamma = getattr(self.params, 'focal_gamma', 2.0)
+                self.criterion = FocalLoss(alpha=1.0, gamma=focal_gamma, reduction='mean').to(device)
+            else:
+                self.criterion = CrossEntropyLoss(label_smoothing=getattr(self.params, 'label_smoothing', 0.0)).to(device)
         elif self.params.downstream_dataset in ['SHU-MI', 'CHB-MIT', 'Mumtaz2016', 'MentalArithmetic', 'TUAB']:
             self.criterion = BCEWithLogitsLoss().to(device)
         elif self.params.downstream_dataset == 'SEED-VIG':
@@ -87,9 +129,9 @@ class Trainer(object):
                 self.scaler = GradScaler('cuda')  # New API
             except TypeError:
                 self.scaler = GradScaler()  # Fallback for older PyTorch
-        else:
-            self.scaler = None
-        self.gradient_accumulation_steps = getattr(params, 'gradient_accumulation_steps', 1)
+        #else:
+        #     self.scaler = None
+        # self.gradient_accumulation_steps = getattr(params, 'gradient_accumulation_steps', 1)
         
         # Initialize memory manager
         self.memory_manager = MemoryManager(
@@ -172,53 +214,33 @@ class Trainer(object):
 
         self.data_length = len(self.data_loader['train'])
         
-        # Learning rate warmup settings
-        self.warmup_epochs = getattr(params, 'warmup_epochs', 3)
-        self.total_steps = self.params.epochs * self.data_length // self.gradient_accumulation_steps
+        # Simple learning rate scheduling (removed warmup for simplicity)
+        #self.total_steps = self.params.epochs * self.data_length // self.gradient_accumulation_steps
         
-        # Ensure warmup doesn't exceed total training steps
-        max_warmup_steps = max(1, self.total_steps // 4)  # Max 25% of training for warmup
-        self.warmup_steps = min(
-            self.warmup_epochs * self.data_length // self.gradient_accumulation_steps,
-            max_warmup_steps
-        )
-        
-        # Create scheduler with warmup
+        # Create simple scheduler without warmup
         if params.scheduler == "cosine":
-            import warnings
-            from torch.optim.lr_scheduler import LambdaLR
-            def lr_lambda(step):
-                if step < self.warmup_steps:
-                    # Linear warmup - avoid division by zero
-                    if self.warmup_steps == 0:
-                        return 1.0
-                    return step / self.warmup_steps
-                else:
-                    # Cosine annealing after warmup
-                    cosine_steps = self.total_steps - self.warmup_steps
-                    if cosine_steps <= 0:
-                        return 1.0  # No cosine annealing if no steps left
-                    progress = (step - self.warmup_steps) / cosine_steps
-                    progress = min(progress, 1.0)  # Clamp to [0, 1]
-                    return 0.5 * (1 + np.cos(np.pi * progress))
-            
-            self.optimizer_scheduler = LambdaLR(self.optimizer, lr_lambda)
+            from torch.optim.lr_scheduler import CosineAnnealingLR
+            self.optimizer_scheduler = CosineAnnealingLR(
+                self.optimizer, 
+                T_max=self.params.epochs,  # Cosine cycle over all epochs
+                eta_min=0  # Minimum LR is 0
+            )
             
         elif params.scheduler == "step":
             self.optimizer_scheduler = torch.optim.lr_scheduler.StepLR(
                 self.optimizer, step_size=max(1, self.params.epochs // 3), gamma=0.5)
         elif params.scheduler == "none":
             self.optimizer_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
-        else:
+        #else:
             # Default fallback for any unrecognized scheduler types
-            print(f"⚠️ Unknown scheduler '{params.scheduler}', defaulting to cosine with warmup")
-            def lr_lambda(step):
-                if step < self.warmup_steps:
-                    return step / self.warmup_steps
-                else:
-                    progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
-                    return 0.5 * (1 + np.cos(np.pi * progress))
-            self.optimizer_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+            #print(f"⚠️ Unknown scheduler '{params.scheduler}', defaulting to cosine with warmup")
+            # def lr_lambda(step):
+            #     if step < self.warmup_steps:
+            #         return step / self.warmup_steps
+            #     else:
+            #         progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
+            #         return 0.5 * (1 + np.cos(np.pi * progress))
+            # self.optimizer_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
         self.n_params_total = sum(p.numel() for p in self.model.parameters())
         self.n_params_trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -305,6 +327,53 @@ class Trainer(object):
         if self.wandb_run:
             wandb.finish()
 
+    def _update_optimizer_for_two_phase(self, phase):
+        """Update optimizer for two-phase training"""
+        if not hasattr(self.params, 'head_lr') or not hasattr(self.params, 'backbone_lr'):
+            print("⚠️ head_lr and backbone_lr not found, using params.lr as fallback")
+            # Use the main learning rate as head_lr, and much smaller for backbone  
+            head_lr = self.params.lr
+            backbone_lr = self.params.lr / 10
+        else:
+            head_lr = self.params.head_lr
+            backbone_lr = self.params.backbone_lr
+        
+        # Get parameter groups with current state
+        param_groups = self.model.get_param_groups(head_lr=head_lr, backbone_lr=backbone_lr)
+        
+        if not param_groups:
+            print("⚠️ No trainable parameters found")
+            return
+            
+        # Create new optimizer with updated parameter groups (using same logic as original)
+        def _get_lion_cls():
+            if hasattr(torch.optim, "Lion"):            # PyTorch ≥ 2.3
+                return torch.optim.Lion
+            try:                                        # community wheel
+                from lion_pytorch import Lion as LionCls
+                return LionCls
+            except ModuleNotFoundError as exc:
+                raise RuntimeError(
+                    "Requested optimizer 'Lion' but neither torch.optim.Lion "
+                    "nor the 'lion-pytorch' package is available."
+                ) from exc
+
+        if self.params.optimizer == 'AdamW':
+            self.optimizer = torch.optim.AdamW(param_groups, weight_decay=self.params.weight_decay)
+        elif self.params.optimizer == "Lion":
+            LionCls = _get_lion_cls()
+            self.optimizer = LionCls(param_groups, weight_decay=self.params.weight_decay, betas=(0.9, 0.99))
+        elif self.params.optimizer == "AMSGrad":
+            self.optimizer = torch.optim.AdamW(param_groups, weight_decay=self.params.weight_decay, amsgrad=True)
+        else:  # SGD fallback
+            self.optimizer = torch.optim.SGD(param_groups, momentum=0.9, weight_decay=self.params.weight_decay)
+        
+        # Print current state
+        total_params = sum(len(group['params']) for group in param_groups)
+        print(f"📊 Phase {phase}: Updated optimizer with {len(param_groups)} parameter groups, {total_params} total trainable params")
+        for i, group in enumerate(param_groups):
+            print(f"   Group {i+1} ({group['name']}): {len(group['params'])} params, lr={group['lr']:.2e}")
+
 
     def train_for_multiclass(self, trial=None):
         f1_best = 0
@@ -320,9 +389,33 @@ class Trainer(object):
         trial_name = f"trial_{trial.number}" if trial else "multiclass_training"
         self.memory_manager.start_memory_monitoring()
         
+        # Initialize two-phase training before the epoch loop if needed
+        if hasattr(self.params, 'two_phase_training') and self.params.two_phase_training:
+            print(f"🚀 Initializing two-phase training")
+            self.model.set_progressive_unfreezing_mode(phase=1)
+            self._update_optimizer_for_two_phase(phase=1)
+
         for epoch in range(self.params.epochs):
+            # Two-phase training logic - only switch at phase transition
+            if hasattr(self.params, 'two_phase_training') and self.params.two_phase_training:
+                if epoch == self.params.phase1_epochs:
+                    # Phase 2: Switch to unfrozen backbone  
+                    print(f"🔄 Switching to Phase 2 at epoch {epoch}")
+                    self.model.set_progressive_unfreezing_mode(phase=2)
+                    self._update_optimizer_for_two_phase(phase=2)
+            
             total_train_start = timer()
-            self.model.train()
+            self.model.train()  # Set model to train mode
+            
+            # In two-phase training, ensure backbone stays in correct mode
+            if hasattr(self.params, 'two_phase_training') and self.params.two_phase_training:
+                if epoch < self.params.phase1_epochs:
+                    # Phase 1: Keep backbone in eval mode
+                    self.model.backbone.eval()
+                else:
+                    # Phase 2: Backbone should be in train mode  
+                    self.model.backbone.train()
+            
             start_time = timer()
             losses = []
             
@@ -341,16 +434,16 @@ class Trainer(object):
                             loss = self.criterion(pred.transpose(1, 2), y)
                         else:
                             loss = self.criterion(pred, y)
-                        # Scale loss for gradient accumulation
-                        loss = loss / self.gradient_accumulation_steps
+                        # Scale loss for gradient accumulation (commented out - no accumulation)
+                        # loss = loss / self.gradient_accumulation_steps
                 else:
                     pred = self.model(x)
                     if self.params.downstream_dataset == 'ISRUC':
                         loss = self.criterion(pred.transpose(1, 2), y)
                     else:
                         loss = self.criterion(pred, y)
-                    # Scale loss for gradient accumulation
-                    loss = loss / self.gradient_accumulation_steps
+                    # Scale loss for gradient accumulation (commented out - no accumulation)  
+                    # loss = loss / self.gradient_accumulation_steps
 
                 # Backward pass
                 if self.use_amp:
@@ -358,25 +451,23 @@ class Trainer(object):
                 else:
                     loss.backward()
                 
-                losses.append(loss.data.cpu().numpy() * self.gradient_accumulation_steps)
+                losses.append(loss.data.cpu().numpy())  # No accumulation scaling
                 
-                # Update weights after accumulation steps
-                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
-                    # Apply gradient clipping and optimization
-                    if self.use_amp:
-                        if self.params.clip_value > 0:
-                            self.scaler.unscale_(self.optimizer)
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        if self.params.clip_value > 0:
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
-                        self.optimizer.step()
-                    
-                    # Step scheduler after each optimizer update (per accumulated gradient step)
-                    self.optimizer_scheduler.step()
-                    self.optimizer.zero_grad()
+                # Update weights every batch (no accumulation)
+                # if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                # Apply gradient clipping and optimization
+                if self.use_amp:
+                    if self.params.clip_value > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    if self.params.clip_value > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.params.clip_value)
+                    self.optimizer.step()
+                
+                self.optimizer.zero_grad()
 
             optim_state = self.optimizer.state_dict()
 
@@ -499,8 +590,8 @@ class Trainer(object):
                 "epochs": self.params.epochs,
                 "frac_data_ORP_train": getattr(self.params, 'orp_train_frac', None),
                 "use_amp": self.use_amp,
-                "gradient_accumulation_steps": self.gradient_accumulation_steps,
-                "warmup_epochs": self.warmup_epochs,
+                #                "gradient_accumulation_steps": self.gradient_accumulation_steps,
+                #"warmup_epochs": self.warmup_epochs,
             })
             api = wandb.Api()
             ENTITY = "thibaut_hasle-epfl"

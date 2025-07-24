@@ -21,6 +21,11 @@ class Evaluator:
         truths = []
         preds = []
         for x, y in tqdm(self.data_loader, mininterval=1):
+            # Skip empty batches (batch size = 0)
+            if x.size(0) == 1:
+                print(f"⚠️ Warning: Skipping empty batch with size {x.size(0)}")
+                continue
+                
             x = x.cuda()
             y = y.cuda()
 

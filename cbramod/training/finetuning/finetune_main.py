@@ -82,9 +82,28 @@ def main(return_params=False):
     # ADD BY THIBAUT
     parser.add_argument('--weight_class', type=str, default=None,
                     help='Path to the .npy file of class weights (optional)')
+    
+    # Two-phase training parameters
+    parser.add_argument('--two_phase_training', type=bool, default=False,
+                        help='Enable two-phase training: phase 1 (frozen backbone) -> phase 2 (unfrozen)')
+    parser.add_argument('--phase1_epochs', type=int, default=3,
+                        help='Number of epochs for phase 1 (frozen backbone)')
+    parser.add_argument('--head_lr', type=float, default=1e-3,
+                        help='Learning rate for head/classifier in two-phase training')
+    parser.add_argument('--backbone_lr', type=float, default=1e-5,
+                        help='Learning rate for backbone in phase 2 of two-phase training')
+    # Gradient accumulation (commented out - may affect performance)
+    # parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+    #                     help='Number of steps to accumulate gradients before updating')
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
     parser.add_argument('--datasets', type=str, default='ORP', help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
     parser.add_argument('--scheduler', type=str, default='cosine', help='["cosine", "step", "none"]')
+    parser.add_argument('--head_type', type=str, default='simple', 
+                        help='Classification head architecture: ["simple", "deep", "attention"]')
+    parser.add_argument('--use_focal_loss', action='store_true', 
+                        help='Use Focal Loss instead of CrossEntropy for imbalanced EEG data (improves N1/REM recall)')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                        help='Gamma parameter for Focal Loss (higher = more focus on hard examples)')
     parser.add_argument('--data_ORP', type=float, default=0.6,
                     help='Fraction of ORP data to use in training set (e.g., 0.1, 0.3, 0.5, 0.6)')
     # Add plot directory
@@ -92,12 +111,8 @@ def main(return_params=False):
                         default='./artifacts/results/figures',
                         help='Directory for plots and figures')    
     # Performance optimization arguments
-    parser.add_argument('--use_amp', action='store_true', default=True,
+    parser.add_argument('--use_amp', action='store_true', default=False,
                     help='Use Automatic Mixed Precision training for faster training and reduced memory usage')
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=4,
-                    help='Number of steps to accumulate gradients before updating weights')
-    parser.add_argument('--warmup_epochs', type=int, default=3,
-                    help='Number of epochs for learning rate warmup')
     parser.add_argument('--results_dir', type=str, default='./artifacts/results', help='results directory')
     params = parser.parse_args()
     # Automatically compute number of datasets
@@ -110,7 +125,22 @@ def main(return_params=False):
         params.class_weights = torch.tensor(weights_array, dtype=torch.float32).cuda()
     else:
         params.class_weights = None
-    print(params)
+    # Set gradient accumulation to 1 (no accumulation) for simplicity
+    # params.gradient_accumulation_steps = 1
+    
+    
+    # Scale learning rate for gradient accumulation (commented out)
+    # if params.gradient_accumulation_steps > 1:
+    #     lr_scaling_factor = params.gradient_accumulation_steps ** 0.5
+    #     params.lr = params.lr * lr_scaling_factor
+    #     print(f"🔧 Scaled LR for gradient accumulation: {params.lr:.2e} (factor: {lr_scaling_factor:.2f})")
+    #     
+    #     # Also scale two-phase learning rates if enabled
+    #     if params.two_phase_training:
+    #         params.head_lr = params.head_lr * lr_scaling_factor
+    #         params.backbone_lr = params.backbone_lr * lr_scaling_factor
+    #         print(f"🔧 Scaled two-phase LRs: Head={params.head_lr:.2e}, Backbone={params.backbone_lr:.2e}")
+
 
     setup_seed(params.seed)
     torch.cuda.set_device(params.cuda)
