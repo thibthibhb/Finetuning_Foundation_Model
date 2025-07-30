@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sys
 from pathlib import Path
+# import boto3
+# import io
 
 # Add project root to path
 current_dir = Path(__file__).parent
@@ -57,12 +59,28 @@ def preprocess_raw_1d_eeg(signal, ch=1, seq_len=30, epoch_size=200):
 
 # ------------------------- Load and Filter EEG -------------------------
 Start = time.time()
-eeg_path = "data/datasets/test_data/eeg_1740519564613.csv"
-raw_data = np.loadtxt(eeg_path, delimiter=',', skiprows=1)
+# bucket_name = 'idn-dev-raw-recordings-bucket'
 
-# Assumes EEG is in second column
+# # S3 path structure
+# userId = "03eadfed-b2ab-45e8-8b8c-54baa6fd27f3"
+# deviceId = "49-44-55-4E-00-01"
+# recordingId = "1714593075890"
+# eeg = f"eeg_{recordingId}.csv"
+# key = f"{userId}/{deviceId}/{recordingId}/{eeg}"
+
+# # Download EEG data from S3
+# s3_client = boto3.client('s3')
+# response = s3_client.get_object(Bucket=bucket_name, Key=key)
+# csv_content = response['Body'].read().decode('utf-8')
+# raw_data = np.loadtxt(io.StringIO(csv_content), delimiter=',', skiprows=1)
+
+# Load EEG data from local file
+eeg_data_path = project_root / "data/datasets/final_dataset/2019_Open_N/eeg_data_npy/2019-sub-001_ses-001_p2.npy"
+raw_data = np.load(eeg_data_path)
+
+# Assumes EEG is in second column or flatten if needed
 if raw_data.ndim > 1:
-    raw_signal = raw_data[:, 1]
+    raw_signal = raw_data.flatten()
 else:
     raw_signal = raw_data
 
@@ -82,13 +100,11 @@ eeg_tensor = torch.tensor(raw_eeg, dtype=torch.float32).to(device)
 # ------------------------- Inference Function -------------------------
 def evaluate(use_pretrained):
     param = Params()
-    param.use_pretrained_weights = use_pretrained
-    param.foundation_dir = "./dummy.pth"  # Prevent foundation load
+    param.use_pretrained_weights = False  # Don't load backbone weights
     model = Model(param).to(device)
 
-    checkpoint_path = (
-        "deploy_prod/4_class_weights.pth"
-    )
+    # Load only the classifier weights
+    checkpoint_path = str(project_root / "deploy_prod" / "4_class_weights.pth")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint, strict=False)
 
@@ -104,7 +120,7 @@ def evaluate(use_pretrained):
     return predictions.cpu().numpy()
 
 # ------------------------- Run Evaluation -------------------------
-predictions_orp = evaluate(use_pretrained=False)
+predictions_orp = evaluate(use_pretrained=True)
 print("Predictions (ORP):", predictions_orp)
 end = time.time()
 print(f"✅ Preprocessing and inference took {end - Start:.2f} seconds.")

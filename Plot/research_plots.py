@@ -18,7 +18,7 @@ from scipy import stats
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import StandardScaler
-import warnings
+import warnings 
 warnings.filterwarnings('ignore')
 
 # Set plotting style
@@ -448,17 +448,17 @@ class CBraModResearchPlotter:
         ax3 = plt.subplot(2, 3, 3)
         if 'orp_train_frac' in filtered_df.columns:
             orp_bins = pd.cut(filtered_df['orp_train_frac'], bins=6)
-            orp_stats = filtered_df.groupby(orp_bins)['test_kappa'].agg(['mean', 'std', 'count'])
+            orp_stats = filtered_df.groupby(orp_bins)['test_kappa'].agg(['max', 'std', 'count'])
             
             x_pos = range(len(orp_stats))
-            bars = ax3.bar(x_pos, orp_stats['mean'], yerr=orp_stats['std'], 
+            bars = ax3.bar(x_pos, orp_stats['max'], yerr=orp_stats['std'], 
                           capsize=5, color='lightcoral', alpha=0.7, edgecolor='darkred')
             
             ax3.set_xticks(x_pos)
             ax3.set_xticklabels([f'{interval.left:.1f}-{interval.right:.1f}' 
                                for interval in orp_stats.index], rotation=45)
             ax3.set_xlabel('ORP Fraction (Data Quality)')
-            ax3.set_ylabel('Mean Test Kappa')
+            ax3.set_ylabel('Max Test Kappa')
             ax3.set_title('RQ2: Data Quality Impact\n(Best performance per data configuration)')
             ax3.grid(True, alpha=0.3)
             # Add count labels
