@@ -92,9 +92,6 @@ def main(return_params=False):
                         help='Learning rate for head/classifier in two-phase training')
     parser.add_argument('--backbone_lr', type=float, default=1e-5,
                         help='Learning rate for backbone in phase 2 of two-phase training')
-    # Gradient accumulation (commented out - may affect performance)
-    # parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
-    #                     help='Number of steps to accumulate gradients before updating')
     parser.add_argument('--tune', action='store_true', help="Use Optuna to tune hyperparameters")
     parser.add_argument('--datasets', type=str, default='ORP', help='Comma-separated dataset names, e.g., ORP,2023_Open_N')
     parser.add_argument('--scheduler', type=str, default='cosine', help='["cosine", "step", "none"]')
@@ -125,23 +122,6 @@ def main(return_params=False):
         params.class_weights = torch.tensor(weights_array, dtype=torch.float32).cuda()
     else:
         params.class_weights = None
-    # Set gradient accumulation to 1 (no accumulation) for simplicity
-    # params.gradient_accumulation_steps = 1
-    
-    
-    # Scale learning rate for gradient accumulation (commented out)
-    # if params.gradient_accumulation_steps > 1:
-    #     lr_scaling_factor = params.gradient_accumulation_steps ** 0.5
-    #     params.lr = params.lr * lr_scaling_factor
-    #     print(f"🔧 Scaled LR for gradient accumulation: {params.lr:.2e} (factor: {lr_scaling_factor:.2f})")
-    #     
-    #     # Also scale two-phase learning rates if enabled
-    #     if params.two_phase_training:
-    #         params.head_lr = params.head_lr * lr_scaling_factor
-    #         params.backbone_lr = params.backbone_lr * lr_scaling_factor
-    #         print(f"🔧 Scaled two-phase LRs: Head={params.head_lr:.2e}, Backbone={params.backbone_lr:.2e}")
-
-
     setup_seed(params.seed)
     torch.cuda.set_device(params.cuda)
     

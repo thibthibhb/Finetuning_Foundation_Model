@@ -36,7 +36,7 @@ def objective(trial, base_params):
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
     params.optimizer = trial.suggest_categorical("optimizer", ["AdamW","Lion"]) #"AMSGrad", "SGD"
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
-    params.head_type = trial.suggest_categorical("head_type", ["deep", "attention"]) #simple
+    params.head_type = trial.suggest_categorical("head_type", ["simple", "deep", "attention"]) #simple
     # Focal Loss - conditional parameter to avoid wasted trials
     params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [True, False])
     # Only tune gamma when actually using focal loss (50% efficiency gain)

@@ -111,6 +111,7 @@ def predict_fn(input_data, model):
         logits = model(input_data)
         probs = F.softmax(logits, dim=1)
         predictions = torch.argmax(probs, dim=1)
+    print("Predictions:", predictions)
     return predictions.cpu().numpy()
 
 def output_fn(prediction, accept='application/json'):
