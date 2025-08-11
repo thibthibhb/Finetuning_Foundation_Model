@@ -12,18 +12,32 @@ from scipy.signal import iirnotch, filtfilt, savgol_filter
 
 def preprocess_epoch(epoch, sfreq):
     # 1) DC offset / baseline
-    epoch = epoch - np.mean(epoch, axis=-1, keepdims=True)
+    #epoch = epoch - np.mean(epoch, axis=-1, keepdims=True)
 
+    # # 2) Artifact removal - remove epochs with extreme amplitudes (likely artifacts)
+    # amplitude_thresh = np.percentile(np.abs(epoch), 99.5)  # 99.5th percentile threshold
+    # if np.max(np.abs(epoch)) > 5 * amplitude_thresh:
+    #     # Replace extreme values with median
+    #     epoch = np.clip(epoch, -3 * amplitude_thresh, 3 * amplitude_thresh)
     
-    # 3) Savitzky-Golay smoothing (window 11 samples, polyorder 2)
-    epoch = savgol_filter(epoch, window_length=11, polyorder=2, axis=-1)
+    # # 3) Savitzky-Golay smoothing (window 11 samples, polyorder 2)
+    # epoch = savgol_filter(epoch, window_length=11, polyorder=2, axis=-1)
     
-    # 4) (Optional) Linear detrend
+    # # 4) Z-score normalization per epoch (crucial for cross-subject consistency)
+    # epoch_std = np.std(epoch, axis=-1, keepdims=True)
+    # if epoch_std > 1e-6:  # Avoid division by zero
+    #     epoch = epoch / (epoch_std + 1e-8)
+    
+    # # 5) Robust scaling - clip extreme outliers after normalization
+    # epoch = np.clip(epoch, -4, 4)  # Remove values beyond ±4 standard deviations
+    
+    # 6) (Optional) Linear detrend - ENABLED for better baseline stability
     # t = np.arange(epoch.shape[-1])
-    # coeffs = np.polyfit(t, epoch, 1)
-    # epoch = epoch - np.polyval(coeffs, t)
+    # coeffs = np.polyfit(t, epoch.flatten() if epoch.ndim == 1 else epoch.squeeze(), 1)
+    # trend = np.polyval(coeffs, t)
+    # epoch = epoch - trend.reshape(epoch.shape)
     
-    # 5) (Optional) Wavelet denoising
+    # 7) (Optional) Wavelet denoising - ENABLED for noise reduction
     # coeffs = pywt.wavedec(epoch, 'db4', level=3, axis=-1)
     # thresh = np.median(np.abs(coeffs[-1])) / 0.6745
     # denoised = [pywt.threshold(c, thresh, mode='soft') for c in coeffs]
@@ -143,7 +157,8 @@ class MemoryEfficientKFoldDataset(Dataset):
 
     def __getitem__(self, idx):
         epoch, label = self.samples[idx]
-        return to_tensor(epoch), torch.tensor(label, dtype=torch.long)
+        sid = self.metadata[idx]['subject']   # <- already tracked in self.metadata
+        return to_tensor(epoch), torch.tensor(label, dtype=torch.long), sid
 
     def get_metadata(self):
         return self.metadata

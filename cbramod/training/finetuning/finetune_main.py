@@ -112,8 +112,17 @@ def main(return_params=False):
     parser.add_argument('--results_dir', type=str, default='./artifacts/results', help='results directory')
     parser.add_argument('--multi_eval', action='store_true', help='Enable multi-subject evaluation for high-performing trials')
     parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
-    parser.add_argument('--preprocess', action='store_true', default=True,
+    parser.add_argument('--preprocess', action='store_true', default=False,
                         help='If set, apply extra EEG preprocessing (notch harmonics, SG smoothing, etc.)')
+    # === In-Context (Prototypical) toggles ===
+    parser.add_argument('--icl_mode', type=str, default='none', choices=['none', 'proto'],
+                        help='In-context mode: none (baseline) or proto (prototypical head at eval)')
+    parser.add_argument('--k_support', type=int, default=0,
+                        help='Per-class support size K for prototypical eval (0 = baseline only)')
+    parser.add_argument('--proto_temp', type=float, default=0.1,
+                        help='Temperature for cosine similarities in proto head')
+    parser.add_argument('--icl_eval_Ks', type=str, default='0,1,5,10',
+                        help='Comma-separated list of K values to sweep at test time (e.g., "0,1,5,10")')
 
     params = parser.parse_args()
     

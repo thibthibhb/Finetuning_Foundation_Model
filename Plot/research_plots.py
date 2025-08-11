@@ -1345,7 +1345,7 @@ class CBraModResearchPlotter:
         self.plot_robustness()
         self.plot_sleep_stage_performance_2()
         self.plot_subject_generalization()
-        self.plot_sleep_stage_f1(self, output_path="./artifacts/results/figures/RQ9_sleep_stage_f1.png")
+        #self.plot_sleep_stage_f1(self, output_path="./artifacts/results/figures/RQ9_sleep_stage_f1.png")
 
         # Create comprehensive dashboard
         self.create_comprehensive_dashboard()

@@ -20,11 +20,18 @@ class Evaluator:
 
         truths = []
         preds = []
-        for x, y in tqdm(self.data_loader, mininterval=1):
-            # Skip empty batches (batch size = 0)
-            if x.size(0) == 1:
-                print(f"⚠️ Warning: Skipping empty batch with size {x.size(0)}")
+        for batch in tqdm(self.data_loader, mininterval=1):
+            # Support both (x, y) and (x, y, sid)
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                x, y, _ = batch
+            else:
+                x, y = batch
+
+            # (Optional) only skip truly empty batches
+            if x.size(0) == 0:
+                print("⚠️ Warning: Skipping empty batch with size 0")
                 continue
+
                 
             x = x.cuda()
             y = y.cuda()
@@ -53,7 +60,11 @@ class Evaluator:
         truths = []
         preds = []
         scores = []
-        for x, y in tqdm(self.data_loader, mininterval=1):
+        for batch in tqdm(self.data_loader, mininterval=1):
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                x, y, _ = batch
+            else:
+                x, y = batch
             x = x.cuda()
             y = y.cuda()
             pred = model(x)
@@ -78,9 +89,14 @@ class Evaluator:
 
         truths = []
         preds = []
-        for x, y in tqdm(self.data_loader, mininterval=1):
+        for batch in tqdm(self.data_loader, mininterval=1):
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                x, y, _ = batch
+            else:
+                x, y = batch
             x = x.cuda()
             y = y.cuda()
+            pred = model(x)
             pred = model(x)
             truths += y.cpu().squeeze().numpy().tolist()
             preds += pred.cpu().squeeze().numpy().tolist()

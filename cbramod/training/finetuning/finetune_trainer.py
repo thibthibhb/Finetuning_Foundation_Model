@@ -26,7 +26,7 @@ import subprocess
 import json
 from datetime import timedelta
 from torchinfo import summary
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, balanced_accuracy_score, accuracy_score, cohen_kappa_score, f1_score
 from collections import Counter
 from csv import QUOTE_MINIMAL
 import wandb
@@ -105,6 +105,12 @@ class Trainer(object):
         device = torch.device(f"cuda:{params.cuda}" if params.cuda >= 0 and torch.cuda.is_available() else "cpu")
         self.model = model.to(device)
         self.device = device
+        
+        # In-Context Learning (Prototype) config
+        self.icl_mode   = getattr(self.params, 'icl_mode', 'none')
+        self.k_support  = getattr(self.params, 'k_support', 0)
+        self.proto_temp = getattr(self.params, 'proto_temp', 0.1)
+        self.icl_eval_Ks = [int(x) for x in str(getattr(self.params, 'icl_eval_Ks', '0')).split(',')]
         
         # Loss function selection - Focal Loss for imbalanced EEG data or standard losses
         if getattr(self.params, 'downstream_dataset', 'IDUN_EEG') in ['FACED', 'SEED-V', 'PhysioNet-MI', 'ISRUC', 'BCIC2020-3', 'TUEV', 'BCIC-IV-2a', 'IDUN_EEG']:
@@ -253,7 +259,13 @@ class Trainer(object):
         total_epochs = n_batches * samples_per_batch
         self.total_epochs = total_epochs
         self.hours_of_data = (total_epochs * 30) / 3600
-        all_labels = [lab for _, y in train_dl for lab in y.tolist()]
+        all_labels = []
+        for batch in train_dl:
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                _, yb, _ = batch
+            else:
+                _, yb = batch
+            all_labels.extend(yb.tolist())
         counts = Counter(all_labels)
         self.class_balance_ratio = {cls: c / len(all_labels) for cls, c in counts.items()}
         self.eval_split = getattr(self.params, "eval_split", "same-night")
@@ -303,7 +315,13 @@ class Trainer(object):
         #print(self.model)
 
     def log_class_distribution(self, loader, name="train"):
-        labels = [lab for _, y in loader for lab in y.tolist()]
+        labels = []
+        for batch in loader:
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                _, yb, _ = batch
+            else:
+                _, yb = batch
+            labels.extend(yb.tolist())
         dist = Counter(labels)
         print(f"{name} class distribution: {dict(dist)}")
 
@@ -373,6 +391,155 @@ class Trainer(object):
             print(f"   Group {i+1} ({group['name']}): {len(group['params'])} params, lr={group['lr']:.2e}")
 
 
+    @torch.no_grad()
+    def _extract_features(self, x):
+        try:
+            if hasattr(self.model, 'extract_features'):
+                return self.model.extract_features(x)
+            if hasattr(self.model, 'forward_features'):
+                return self.model.forward_features(x)
+        except Exception:
+            pass
+        # TEMP fallback:
+        out = self.model(x)
+        if out.ndim > 2:
+            out = out.mean(dim=tuple(range(2, out.ndim)))
+        return out
+
+    @torch.no_grad()
+    def _proto_eval_Ks(self, loader, K_list, split_name="test"):
+        """
+        Build per-subject support/query splits and evaluate a prototypical head
+        for each K. We compute BOTH:
+        - baseline metrics on the exact same query subset
+        - proto metrics on that same query subset
+        and print a paired comparison.
+
+        Notes:
+        • Uses encoder features if self._extract_features is wired to them,
+            otherwise falls back to logits.
+        • Metrics: balanced accuracy, Cohen's kappa, weighted F1 (to match baseline).
+        """
+        # local imports so you don't have to touch file-level imports
+        from sklearn.metrics import balanced_accuracy_score, f1_score, cohen_kappa_score
+        import numpy as np
+        import torch
+
+        device       = self.device
+        num_classes  = getattr(self.params, 'num_of_classes', 5)
+        temperature  = self.proto_temp
+
+        # 1) Collect features, labels, subject ids, and baseline predictions
+        all_feats, all_labels, all_sids = [], [], []
+        baseline_preds_all = []
+
+        for batch in loader:
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                xb, yb, sidb = batch
+            else:
+                xb, yb = batch
+                sidb = ['UNK'] * len(yb)
+
+            xb = xb.to(device)
+
+            # features + baseline logits
+            with (autocast('cuda') if self.use_amp else torch.cuda.amp.autocast(enabled=False)):
+                feats     = self._extract_features(xb)   # prefer encoder features if available
+                logits_bl = self.model(xb)               # baseline logits
+
+            all_feats.append(feats.detach().float().cpu())
+            all_labels.append(yb.detach().cpu())
+            all_sids.extend(list(sidb))
+            baseline_preds_all.append(logits_bl.argmax(-1).detach().cpu())
+
+        feats = torch.cat(all_feats, dim=0)         # [N, D] (CPU)
+        labels = torch.cat(all_labels, dim=0)       # [N]
+        sids = np.array(all_sids)
+        baseline_preds_all = torch.cat(baseline_preds_all, dim=0)  # [N]
+
+        # 2) Index by subject
+        subj_to_idx = {}
+        for i, s in enumerate(sids):
+            subj_to_idx.setdefault(s, []).append(i)
+
+        results = {}
+        for K in K_list:
+            if K == 0:
+                # K=0 is your baseline (already printed elsewhere). We store None for consistency.
+                results[K] = None
+                continue
+
+            # accumulators for paired comparison (same query subset)
+            proto_preds_all, proto_gts_all = [], []
+            base_preds_all,  base_gts_all  = [], []
+
+            for s, idxs in subj_to_idx.items():
+                idxs = np.array(idxs)
+                z = feats[idxs]    # [Ns, D] CPU
+                y = labels[idxs]   # [Ns]    CPU
+
+                # 2.a pick up to K per class as support (within this subject)
+                support_mask = torch.zeros(len(idxs), dtype=torch.bool)
+                y_np = y.numpy()
+                for c in range(num_classes):
+                    cls_idx = np.where(y_np == c)[0]
+                    if cls_idx.size == 0:
+                        continue
+                    take = min(K, cls_idx.size)
+                    sel = np.random.choice(cls_idx, size=take, replace=False)
+                    support_mask[torch.from_numpy(sel)] = True
+
+                query_mask = ~support_mask
+                if query_mask.sum().item() == 0 or support_mask.sum().item() == 0:
+                    # Not enough samples to evaluate this subject at this K
+                    continue
+
+                z_sup, y_sup = z[support_mask], y[support_mask]
+                z_que, y_que = z[query_mask], y[query_mask]
+
+                # map query rows back to GLOBAL indices to grab baseline preds on the same subset
+                query_global_idxs = idxs[query_mask.numpy()]
+                baseline_q_preds = baseline_preds_all[torch.as_tensor(query_global_idxs)].numpy().tolist()
+
+                # prototypes & proto predictions
+                protos = _compute_prototypes(z_sup.to(device), y_sup.to(device), num_classes)   # [C, D]
+                logits = _proto_logits(z_que.to(device), protos, temperature=temperature)       # [Nq, C]
+                pred   = logits.argmax(dim=-1).cpu().tolist()
+
+                # accumulate paired sets
+                proto_preds_all.extend(pred)
+                proto_gts_all.extend(y_que.tolist())
+                base_preds_all.extend(baseline_q_preds)
+                base_gts_all.extend(y_que.tolist())
+
+            if len(proto_gts_all) == 0:
+                print(f"[{split_name}] K={K}: no valid subjects for proto eval (skipping).")
+                continue
+
+            # 3) Compute paired metrics (same query subset)
+            acc_bal_proto = balanced_accuracy_score(proto_gts_all, proto_preds_all)
+            kappa_proto   = cohen_kappa_score(proto_gts_all, proto_preds_all)
+            f1_w_proto    = f1_score(proto_gts_all, proto_preds_all, average='weighted')
+
+            acc_bal_base  = balanced_accuracy_score(base_gts_all, base_preds_all)
+            kappa_base    = cohen_kappa_score(base_gts_all, base_preds_all)
+            f1_w_base     = f1_score(base_gts_all, base_preds_all, average='weighted')
+
+            print(
+                f"[{split_name}] K={K} | "
+                f"BASE(acc_bal={acc_bal_base:.4f}, κ={kappa_base:.4f}, f1_w={f1_w_base:.4f})  "
+                f"→ PROTO(acc_bal={acc_bal_proto:.4f}, κ={kappa_proto:.4f}, f1_w={f1_w_proto:.4f})  "
+                f"Δκ={kappa_proto - kappa_base:+.4f}"
+            )
+
+            results[K] = dict(
+                base_acc_bal=acc_bal_base, base_kappa=kappa_base, base_f1_w=f1_w_base,
+                proto_acc_bal=acc_bal_proto, proto_kappa=kappa_proto, proto_f1_w=f1_w_proto,
+            )
+
+        return results
+
+
     def train_for_multiclass(self, trial=None):
         f1_best = 0
         kappa_best = 0
@@ -420,10 +587,15 @@ class Trainer(object):
             # Reset gradient accumulation
             self.optimizer.zero_grad()
 
-            for batch_idx, (x, y) in enumerate(tqdm(self.data_loader['train'], mininterval=10)):
+            for batch_idx, batch in enumerate(tqdm(self.data_loader['train'], mininterval=10)):
+                if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                    x, y, sid = batch
+                else:
+                    x, y = batch
+                    sid = None
                 x = x.to(self.device)
                 y = y.to(self.device)
-
+                
                 # Forward pass with mixed precision
                 if self.use_amp:
                     with autocast('cuda'):
@@ -479,10 +651,15 @@ class Trainer(object):
                             raise optuna.exceptions.TrialPruned()
 
                     val_losses = []
-                    for x_val, y_val in self.data_loader['val']:
+                    for batch in self.data_loader['val']:
+                        if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                            x_val, y_val, _ = batch
+                        else:
+                            x_val, y_val = batch
+
                         x_val = x_val.to(self.device)
                         y_val = y_val.to(self.device)
-                        
+
                         if self.use_amp:
                             with autocast('cuda'):
                                 pred_val = self.model(x_val)
@@ -638,6 +815,20 @@ class Trainer(object):
             checkpoint_summary = self.memory_manager.get_checkpoint_summary()
             print(f"📊 Checkpoint Summary: {checkpoint_summary['total_files']} files, "
                   f"{checkpoint_summary['total_size_mb']:.1f} MB total")
+            
+            # ==== Optional: K-shot Prototypical Evaluation ====
+            if self.icl_mode == 'proto' or any(k > 0 for k in self.icl_eval_Ks):
+                print("\n🔎 Running prototypical (in-context) K-sweep on TEST split...")
+                proto_results = self._proto_eval_Ks(self.data_loader['test'], self.icl_eval_Ks, split_name="test")
+                # Log to W&B if available
+                for K, res in (proto_results or {}).items():
+                    if res is None:
+                        continue
+                    self.log_wandb_metrics({
+                        f"proto_test_acc_K{K}":   res['acc'],
+                        f"proto_test_kappa_K{K}": res['kappa'],
+                        f"proto_test_f1_K{K}":    res['f1'],
+                    })
 
         self.close_wandb()
         
@@ -646,6 +837,30 @@ class Trainer(object):
 
         return kappa_best
 
+
+
+
+def _l2norm(x, dim=-1, eps=1e-8):
+    return x / (x.norm(dim=dim, keepdim=True) + eps)
+
+@torch.no_grad()
+def _compute_prototypes(support_feats, support_labels, num_classes):
+    # support_feats: [Ns, D]; support_labels: [Ns]
+    protos = []
+    for k in range(num_classes):
+        mask = (support_labels == k)
+        if mask.any():
+            proto = support_feats[mask].mean(0)
+        else:
+            proto = torch.zeros(support_feats.size(1), device=support_feats.device)
+        protos.append(proto)
+    protos = torch.stack(protos, 0)  # [Kc, D]
+    return _l2norm(protos, dim=-1)
+
+def _proto_logits(query_feats, prototypes, temperature=0.1):
+    qn = _l2norm(query_feats, dim=-1)      # [Nq, D]
+    sims = qn @ prototypes.t()             # [Nq, Kc]
+    return sims / max(1e-8, temperature)
 
     # def train_for_binaryclass(self):
     #     acc_best = 0

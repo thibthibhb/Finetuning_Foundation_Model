@@ -77,20 +77,20 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     params.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
     params.label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2, step=0.01)
     params.dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.05)
-    params.batch_size = trial.suggest_categorical("batch_size", [256, 512, 1024])
+    params.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256, 512, 1024])
     params.clip_value = trial.suggest_float("clip_value", 0.0, 2.0, step=0.5)
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
     params.optimizer = trial.suggest_categorical("optimizer", ["AdamW","Lion"])
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
-    params.head_type = trial.suggest_categorical("head_type", ["simple", "deep", "attention"])
-    params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [True, False])
+    params.head_type = trial.suggest_categorical("head_type", ["simple"]) #, "deep", "attention"
+    params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [False]) #True, 
     if params.use_focal_loss:
         params.focal_gamma = trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5)
     else:
         params.focal_gamma = 2.0
-    params.data_ORP = trial.suggest_float("data_ORP", 0.4,0.6, step=0.1)
-    params.two_phase_training = trial.suggest_categorical("two_phase_training", [True, False])
+    params.data_ORP = trial.suggest_float("data_ORP", 0.55,0.6, step=0.1)
+    params.two_phase_training = trial.suggest_categorical("two_phase_training", [False]) #True, 
 
     if params.two_phase_training:
         params.phase1_epochs = trial.suggest_int("phase1_epochs", 2, 5)
