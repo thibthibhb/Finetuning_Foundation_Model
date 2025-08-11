@@ -9,6 +9,10 @@ import json
 import boto3
 import os
 import io
+import logging, sys
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+import hashlib, os, logging, torch
+
 # ------------------------- Parameters -------------------------
 class Params:
     use_pretrained_weights = False
@@ -16,7 +20,16 @@ class Params:
     cuda = 0
     num_of_classes = 4
 
-# ------------------------- Filtering -------------------------
+# ------------------------- Setup -------------------------
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+setup_seed(42)
+
+# ------------------------- Filtering Functions -------------------------
 def apply_bandpass(signal, sfreq, l_freq=0.3, h_freq=35.):
     return mne.filter.filter_data(signal, sfreq=sfreq, l_freq=l_freq, h_freq=h_freq, verbose=False)
 
@@ -27,7 +40,11 @@ def apply_resample(signal, orig_sfreq, target_sfreq):
     num_samples = int(len(signal) * target_sfreq / orig_sfreq)
     return resample(signal, num_samples)
 
+# ------------------------- Preprocess EEG -------------------------
 def preprocess_raw_1d_eeg(signal, ch=1, seq_len=30, epoch_size=200):
+    """
+    Reshape a 1D EEG array into (N, ch, seq_len, epoch_size)
+    """
     total_points = signal.shape[0]
     total_epochs = total_points // (seq_len * epoch_size)
     usable_points = total_epochs * seq_len * epoch_size
@@ -35,23 +52,33 @@ def preprocess_raw_1d_eeg(signal, ch=1, seq_len=30, epoch_size=200):
     reshaped = trimmed.reshape(total_epochs, ch, seq_len, epoch_size)
     return reshaped
 
+
 # ------------------------- SageMaker Inference API -------------------------
 
 def model_fn(model_dir):
-    device = torch.device("cpu")
     param = Params()
+    device = torch.device("cpu")
     model = Model(param).to(device)
-    ckpt_path = os.path.join(model_dir, "4_class_weights.pth")
-    checkpoint = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(checkpoint, strict=False)
 
     if hasattr(model.backbone, 'proj_out'):
         model.backbone.proj_out = torch.nn.Identity()
 
+    ckpt_path = os.path.join(model_dir, "4_class_weights.pth")
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(checkpoint, strict=False)
+
     model.eval()
+
+    logger = logging.getLogger(__name__)
+    logger.info("🔑 SHA256 %s", hashlib.sha256(open(ckpt_path,'rb').read()).hexdigest())
+
+    missing, unexpected = model.load_state_dict(checkpoint, strict=False)
+    logger.info("🚩 missing %s", missing)
+    logger.info("🚩 unexpected %s", unexpected)
     return model
 
 def input_fn(request_body, content_type='application/json'):
+    device = torch.device("cpu")
     if content_type != 'application/json':
         raise ValueError("Unsupported content type")
 
@@ -86,47 +113,51 @@ def input_fn(request_body, content_type='application/json'):
     s3 = boto3.client("s3")
     response = s3.get_object(Bucket=bucket_name, Key=key)
     eeg_bytes = response["Body"].read()
-
+    logger = logging.getLogger(__name__)
     eeg_np = np.loadtxt(io.BytesIO(eeg_bytes), delimiter=",", skiprows=1)
+    logger.info("🏷️ S3 object etag: %s", response["ETag"])
 
     if eeg_np.ndim > 1:
         raw_signal = eeg_np[:, 1]
     else:
         raw_signal = eeg_np
+        
+    
+    logger.info(f"📈 First raw values: {raw_signal[:10].tolist()}")
+    logger.info("📊 Before filtering: μ %.2f σ %.2f", raw_signal.mean(), raw_signal.std())
 
     raw_signal = apply_notch(raw_signal, sfreq=orig_sfreq, freq=50)
     raw_signal = apply_bandpass(raw_signal, sfreq=orig_sfreq, l_freq=0.3, h_freq=35)
     raw_signal = apply_resample(raw_signal, orig_sfreq, target_sfreq)
 
+    logger.info("📊 After filtering: μ %.2f σ %.2f", raw_signal.mean(), raw_signal.std())
     eeg = preprocess_raw_1d_eeg(raw_signal)
-    eeg_tensor = torch.tensor(eeg, dtype=torch.float32)
+    eeg_tensor = torch.tensor(eeg, dtype=torch.float32).to(device)
+    logger.info(" Final tensor shape: %s", eeg_tensor.shape)
+    logger.info(" Final tensor stats: μ %.2f σ %.2f min %.2f max %.2f",
+                eeg_tensor.mean().item(),
+                eeg_tensor.std().item(),
+                eeg_tensor.min().item(),
+                eeg_tensor.max().item())
+    print("Tensor shape:", eeg_tensor.shape)
 
     return eeg_tensor
-
-
-
 
 def predict_fn(input_data, model):
     with torch.no_grad():
         logits = model(input_data)
         probs = F.softmax(logits, dim=1)
         predictions = torch.argmax(probs, dim=1)
+    logger = logging.getLogger(__name__)
+    logger.info(" tensor μ %.6f σ %.6f min %.4f max %.4f shape %s",
+            input_data.mean(), input_data.std(),
+            input_data.min(), input_data.max(),
+            tuple(input_data.shape))
     print("Predictions:", predictions)
     return predictions.cpu().numpy()
 
 def output_fn(prediction, accept='application/json'):
     return json.dumps({"prediction": prediction.tolist()})
-
-
-
-
-
-
-
-
-
-
-
 
 
 

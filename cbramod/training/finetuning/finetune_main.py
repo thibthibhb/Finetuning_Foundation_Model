@@ -55,7 +55,7 @@ def main(return_params=False):
     parser.add_argument('--dropout', type=float, default=0.0, help='dropout') # 0.1
     parser.add_argument('--sample_rate', type=float, default=200, help='sample_rate') # 200
     """############ Downstream dataset settings ############"""
-    parser.add_argument('--downstream_dataset', type=str, default='FACED',
+    parser.add_argument('--downstream_dataset', type=str, default='IDUN_EEG',
                         help='[FACED, SEED-V, PhysioNet-MI, SHU-MI, ISRUC, CHB-MIT, BCIC2020-3, Mumtaz2016, SEED-VIG, MentalArithmetic, TUEV, TUAB, BCIC-IV-2a]')
     parser.add_argument('--datasets_dir', type=str,
                         default='/data/datasets/BigDownstream/Faced/processed',
@@ -73,7 +73,6 @@ def main(return_params=False):
     parser.add_argument('--use_pretrained_weights', type=bool,
                         default=True, help='use_pretrained_weights')
     parser.add_argument('--foundation_dir', type=str,
-                        # default='/data/wjq/models_weights/Big/0.4/epoch40_loss0.001386052928864956.pth',
                         default='./artifacts/models/pretrained/pretrained_weights.pth',
                         help='foundation_dir')
     parser.add_argument("--run_name", type=str, default="test", help="WandB run name prefix")
@@ -111,7 +110,13 @@ def main(return_params=False):
     parser.add_argument('--use_amp', action='store_true', default=False,
                     help='Use Automatic Mixed Precision training for faster training and reduced memory usage')
     parser.add_argument('--results_dir', type=str, default='./artifacts/results', help='results directory')
+    parser.add_argument('--multi_eval', action='store_true', help='Enable multi-subject evaluation for high-performing trials')
+    parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
+    parser.add_argument('--preprocess', action='store_true', default=True,
+                        help='If set, apply extra EEG preprocessing (notch harmonics, SG smoothing, etc.)')
+
     params = parser.parse_args()
+    
     # Automatically compute number of datasets
     params.dataset_names = [name.strip() for name in params.datasets.split(',')]
     params.num_datasets = len(params.dataset_names)
@@ -125,9 +130,11 @@ def main(return_params=False):
     setup_seed(params.seed)
     torch.cuda.set_device(params.cuda)
     
-    # ✨ NEW: move tuning here
+    if return_params:
+        return params
+
     if params.tune:
-        run_optuna_tuning(params)
+        run_optuna_tuning(params, multi_eval=params.multi_eval, multi_eval_subjects=params.multi_eval_subjects)
         print("Tuning completed. Exiting.")
         return
     

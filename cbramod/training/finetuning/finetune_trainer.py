@@ -136,9 +136,7 @@ class Trainer(object):
         # Initialize memory manager
         self.memory_manager = MemoryManager(
             checkpoint_dir=getattr(params, 'model_dir', './artifacts/models/finetuned'),
-            max_checkpoints=getattr(params, 'max_checkpoints', 5),
-            cleanup_older_than_days=getattr(params, 'cleanup_older_than_days', 7),
-            memory_threshold_mb=getattr(params, 'memory_threshold_mb', 1000.0)
+            cleanup_older_than_days=getattr(params, 'cleanup_older_than_days', 30)
         )
         backbone_params = []
         other_params = []

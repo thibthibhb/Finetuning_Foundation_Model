@@ -16,7 +16,7 @@ datasets/
 temp/
 tmp/
 cache/
-
+Unlabelled/
 # DVC (Data Version Control)
 .dvc/
 *.dvc

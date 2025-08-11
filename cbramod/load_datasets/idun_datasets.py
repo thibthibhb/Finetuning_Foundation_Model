@@ -6,11 +6,38 @@ from collections import defaultdict
 from sklearn.model_selection import GroupKFold
 from utils.util import to_tensor
 
-            
+import numpy as np
+from scipy.signal import iirnotch, filtfilt, savgol_filter
+# Optional: import pywt for wavelet denoising
+
+def preprocess_epoch(epoch, sfreq):
+    # 1) DC offset / baseline
+    epoch = epoch - np.mean(epoch, axis=-1, keepdims=True)
 
     
+    # 3) Savitzky-Golay smoothing (window 11 samples, polyorder 2)
+    epoch = savgol_filter(epoch, window_length=11, polyorder=2, axis=-1)
+    
+    # 4) (Optional) Linear detrend
+    # t = np.arange(epoch.shape[-1])
+    # coeffs = np.polyfit(t, epoch, 1)
+    # epoch = epoch - np.polyval(coeffs, t)
+    
+    # 5) (Optional) Wavelet denoising
+    # coeffs = pywt.wavedec(epoch, 'db4', level=3, axis=-1)
+    # thresh = np.median(np.abs(coeffs[-1])) / 0.6745
+    # denoised = [pywt.threshold(c, thresh, mode='soft') for c in coeffs]
+    # epoch = pywt.waverec(denoised, 'db4', axis=-1)
+    
+    return epoch
+            
+    
 class MemoryEfficientKFoldDataset(Dataset):
-    def __init__(self, seqs_labels_path_pair, num_of_classes=5):
+    def __init__(self, seqs_labels_path_pair, num_of_classes=5, do_preprocess: bool = False, sfreq: float = 200.0):
+        # ✨ store the flags on the object
+        self.do_preprocess = do_preprocess
+        self.sfreq = sfreq        
+        
         self.samples = []
         self.metadata = []
         self.num_of_classes = num_of_classes
@@ -21,6 +48,10 @@ class MemoryEfficientKFoldDataset(Dataset):
 
             try:
                 seq = np.load(seq_path)
+                if self.do_preprocess:
+                    for i in range(seq.shape[0]):
+                        # apply to each epoch + channel
+                        seq[i] = preprocess_epoch(seq[i], self.sfreq)
                 label = np.load(label_path)
             except Exception as e:
                 print(f"[❌] Failed loading {seq_path}: {e}")

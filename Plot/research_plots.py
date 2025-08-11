@@ -1,8 +1,3 @@
-"""
-Enhanced Research Plotting Module for CBraMod
-Generates publication-ready plots answering key research questions
-"""
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
@@ -15,9 +10,7 @@ import os
 import wandb
 import functools
 from scipy import stats
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
-from sklearn.preprocessing import StandardScaler
 import warnings 
 warnings.filterwarnings('ignore')
 
@@ -29,7 +22,6 @@ except OSError:
         plt.style.use('seaborn-whitegrid')
     except OSError:
         plt.style.use('default')
-        
 sns.set_palette("husl")
 
 class CBraModResearchPlotter:
@@ -44,6 +36,11 @@ class CBraModResearchPlotter:
         
         # Fetch and process data
         self.df = self._fetch_and_process_data()
+
+        # Quick column overview
+        # print("Available columns in the dataframe:")
+        # for col in self.df.columns:
+        #     print(f" - {col}")
         
     @functools.lru_cache(maxsize=1)
     def _fetch_wandb_runs(self):
@@ -55,108 +52,257 @@ class CBraModResearchPlotter:
     def _fetch_and_process_data(self):
         """Process WandB data for analysis"""
         runs = self._fetch_wandb_runs()
+        print(len(runs), "runs found in the project")
         data = []
-        
+        finished = 0
         for run in runs:
             if run.state == "finished":
+                finished += 1
                 row = dict(run.summary)
                 row.update(run.config)
-                row["name"] = run.name
+                row["run_name"] = run.name
                 row["id"] = run.id
-                
-                # Extract ORP fraction
+                # extract ORP fraction if present
                 if "data_ORP" in row:
                     row["orp_train_frac"] = float(row["data_ORP"])
-                    data.append(row)
-        
+                data.append(row)
+        print(finished, "runs finished")
         df = pd.DataFrame(data)
-        if len(df) == 0:
-            print("⚠️ No data found!")
-            return pd.DataFrame()
-            
-        # Clean and process data
         df = df.dropna(subset=['test_kappa'])
-        df['orp_train_frac'] = df['orp_train_frac'].round(2)
-        
-        # Keep best run per configuration
-        group_cols = ['hours_of_data', 'orp_train_frac', 'num_subjects_train']
-        available_cols = [col for col in group_cols if col in df.columns]
-        if available_cols:
-            df = df.sort_values('test_kappa', ascending=False)
-            df = df.groupby(available_cols, as_index=False).first()
-        
+        # Round ORP fraction
+        if 'orp_train_frac' in df.columns:
+            df['orp_train_frac'] = df['orp_train_frac'].round(2)
         print(f"✅ Processed {len(df)} runs for analysis")
         return df
-    
+
     def _get_best_runs_per_data_config(self, df):
-        """Keep only the best performing run for each data configuration (hours + ORP fraction)"""
-        if len(df) == 0:
-            return df
-            
-        # Create bins for hours of data to group similar amounts together
-        if 'hours_of_data' in df.columns:
-            # Create reasonable bins for hours (e.g., every 50-100 hours)
-            max_hours = df['hours_of_data'].max()
-            if max_hours > 500:
-                bin_size = 100  # 100-hour bins for large datasets
-            elif max_hours > 200:
-                bin_size = 50   # 50-hour bins for medium datasets  
-            else:
-                bin_size = 50   # 20-hour bins for small datasets
-                
+        """Helper: best run per hours & quality group"""
+        df = df.copy()
+        # bin hours
+        if 'hours_of_data' in df:
+            bin_size = 50 if df['hours_of_data'].max() < 200 else 100
             df['hours_bin'] = (df['hours_of_data'] // bin_size) * bin_size
-        else:
-            df['hours_bin'] = 0
-             
-        # Create bins for ORP fraction (round to nearest 0.1)
-        if 'orp_train_frac' in df.columns:
+        # bin ORP
+        if 'orp_train_frac' in df:
             df['orp_bin'] = (df['orp_train_frac'] * 10).round() / 10
-        else:
-            df['orp_bin'] = 0.5  # Default value
-            
-        initial_count = len(df)
+        group_cols = ['hours_bin','orp_bin']
+        if 'num_subjects_train' in df:
+            df['subs_bin'] = (df['num_subjects_train']//10)*10
+            group_cols.append('subs_bin')
+        idx = df.groupby(group_cols)['test_kappa'].idxmax()
+        return df.loc[idx].reset_index(drop=True)
+
+    def plot_sleep_stage_f1(self, output_path=None):
+        """
+        Plot mean±std F1 score for each sleep stage.
+        Expects df['class_metrics'] to be a dict-like per row, 
+        e.g. {'Wake': 0.80, 'N1': 0.58, 'N2': 0.65, 'REM': 0.66}
+        """
+        df = self._get_best_runs_per_data_config(self.df)
+        # Expand class_metrics into a DataFrame
+        metrics_df = pd.DataFrame(df['class_metrics'].tolist())
         
-        # Filter to only keep runs with 5 classes to remove bias
-        if 'num_of_classes' in df.columns:
-            df = df[df['num_of_classes'] == 5]
-            print(f"🔧 Filtered to only 5-class runs: {initial_count} → {len(df)} runs")
+        # Compute statistics
+        means = metrics_df.mean()
+        stds  = metrics_df.std()
+        stages = means.index.tolist()
         
-        # Group by data configuration and keep the best (highest kappa) run in each group
-        group_cols = ['hours_bin', 'orp_bin']
+        # Plot
+        fig, ax = plt.subplots(figsize=(8,5))
+        bars = ax.bar(stages, means, yerr=stds, capsize=5, alpha=0.8, edgecolor='black')
         
-        # Add subject count if available for more precise grouping
-        if 'num_subjects_train' in df.columns:
-            df['subjects_bin'] = (df['num_subjects_train'] // 10) * 10  # Group by tens
-            group_cols.append('subjects_bin')
+        ax.set_title("Performance Across Sleep Stages\n(Mean ± SD F1 Score)")
+        ax.set_xlabel("Sleep Stage")
+        ax.set_ylabel("F1 Score")
+        ax.set_ylim(0, 1)
+        ax.grid(axis='y', alpha=0.3)
         
-        # Keep the run with highest test_kappa in each group
-        filtered_df = df.loc[df.groupby(group_cols)['test_kappa'].idxmax()].copy()
+        # Annotate values
+        for bar, mean, std in zip(bars, means, stds):
+            ax.text(bar.get_x() + bar.get_width()/2,
+                    mean + std + 0.02,
+                    f"{mean:.2f}±{std:.2f}",
+                    ha='center', va='bottom',
+                    fontsize=10, fontweight='bold')
         
-        # Clear outliers in performance (likely due to bad hyperparams)
-        if 'test_kappa' in filtered_df.columns and len(filtered_df) > 10:
-            # Keep runs with kappa > 0.4 to remove bottom performers
-            kappa_threshold = 0.4
-            before_count = len(filtered_df)
-            filtered_df = filtered_df[filtered_df['test_kappa'] > kappa_threshold]
-            after_count = len(filtered_df)
-            print(f"🔧 Filtered low performers (κ > {kappa_threshold:.3f}): {before_count} → {after_count} runs")
-        
-        # Clean up temporary columns
-        temp_cols = ['hours_bin', 'orp_bin']
-        if 'subjects_bin' in filtered_df.columns:
-            temp_cols.append('subjects_bin')
-        filtered_df = filtered_df.drop(columns=temp_cols)
-        
-        final_count = len(filtered_df)
-        
-        print(f"📊 Data filtering: {initial_count} → {final_count} runs ({final_count/initial_count*100:.1f}% kept)")
-        print(f"🎯 Kept best performing run for each data configuration")
-        print(f"   - Hours bins: {bin_size}h intervals")
-        print(f"   - ORP bins: 0.1 intervals") 
-        if 'subjects_bin' in df.columns:
-            print(f"   - Subject bins: 10-subject intervals")
-            
-        return filtered_df
+        plt.tight_layout()
+        if output_path:
+            fig.savefig(output_path, dpi=300)
+            print(f"✅ Saved sleep‐stage F1 plot to {output_path}")
+        plt.show()
+
+    def plot_minimal_calibration_data_2(self):
+        """
+        RQ1: Minimal individual calibration data required
+        """
+        df = self._get_best_runs_per_data_config(self.df)
+        # scatter hours vs kappa
+        plt.figure(figsize=(6,4))
+        plt.scatter(df['hours_of_data'], df['test_kappa'], c=df.get('orp_train_frac'), cmap='viridis', s=50)
+        plt.colorbar(label='ORP Fraction')
+        plt.xlabel('Hours of Subject Data')
+        plt.ylabel('Test Kappa')
+        plt.title('RQ1: Calibration Data vs Performance')
+        plt.grid(alpha=0.3)
+        path = os.path.join(self.output_dir,'RQ1_minimal_calibration.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ1 plot to {path}")
+
+    def plot_unfreeze_epoch_analysis(self):
+        """
+        RQ2: Impact of backbone unfreeze epoch
+        Requires 'phase1_epochs' and 'test_kappa'
+        """
+        if 'phase1_epochs' not in self.df.columns:
+            print("⚠️ phase1_epochs missing, cannot analyze unfreeze impact")
+            return
+        # Extract and clean data
+        x = self.df['phase1_epochs']
+        y = self.df['test_kappa']
+        mask = x.notna() & y.notna() & np.isfinite(x) & np.isfinite(y)
+        x = x[mask]
+        y = y[mask]
+        if len(x) < 2:
+            print("⚠️ Not enough data for unfreeze epoch trend")
+        plt.figure(figsize=(6,4))
+        plt.scatter(x, y, alpha=0.7)
+        # Attempt linear fit with error handling
+        try:
+            z = np.polyfit(x, y, 1)
+            p = np.poly1d(z)
+            xs = np.linspace(x.min(), x.max(), 50)
+            plt.plot(xs, p(xs), 'r--')
+        except Exception as e:
+            print(f"⚠️ Trend line fit failed ({e.__class__.__name__}), skipping fit")
+        plt.xlabel('Freeze Epochs before Unfreeze')
+        plt.ylabel('Test Kappa')
+        plt.title('RQ2: Epoch Unfreeze Impact')
+        plt.grid(alpha=0.3)
+        path = os.path.join(self.output_dir,'RQ2_unfreeze_epoch.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ2 plot to {path}")
+
+    def plot_baseline_comparison(self):
+        """
+        RQ3: Comparison vs baselines
+        Uses 'baseline' flag and 'test_kappa'
+        """
+        if 'baseline' not in self.df.columns:
+            print("⚠️ baseline column missing for RQ3")
+            return
+        agg = self.df.groupby('baseline')['test_kappa'].mean().reset_index()
+        agg['label'] = agg['baseline'].map({True:'Baseline',False:'Fine-tuned'})
+        plt.figure(figsize=(6,4))
+        plt.bar(agg['label'],agg['test_kappa'],color=['gray','blue'])
+        plt.ylabel('Mean Test Kappa')
+        plt.title('RQ3: Baseline vs Fine-tuned')
+        for i,v in enumerate(agg['test_kappa']): plt.text(i,v+0.01,f"{v:.2f}",ha='center')
+        path = os.path.join(self.output_dir,'RQ3_baseline_comparison.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ3 plot to {path}")
+
+    def plot_task_granularity(self):
+        """
+        RQ4: 4-class vs 5-class performance
+        """
+        if 'num_of_classes' not in self.df.columns:
+            print("⚠️ num_of_classes missing for RQ4")
+            return
+        groups = self.df.groupby('num_of_classes')['test_kappa']
+        data = [groups.get_group(c) for c in sorted(groups.groups)]
+        plt.figure(figsize=(6,4))
+        plt.boxplot(data, labels=[str(c) for c in sorted(groups.groups)])
+        plt.xlabel('# Classes')
+        plt.ylabel('Test Kappa')
+        plt.title('RQ4: Task Granularity')
+        plt.grid(alpha=0.3)
+        path = os.path.join(self.output_dir,'RQ4_task_granularity.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ4 plot to {path}")
+
+    def plot_scaling_laws_2(self):
+        """
+        RQ5: Scaling laws across data size, subjects, quality
+        """
+        df = self._get_best_runs_per_data_config(self.df)
+        fig,ax = plt.subplots(1,3,figsize=(18,4))
+        # samples
+        ax[0].scatter(df['hours_of_data'],df['test_kappa'],alpha=0.7)
+        ax[0].set(xlabel='Hours',ylabel='Kappa',title='Samples Scaling')
+        # subjects
+        if 'num_subjects_train' in df:
+            ax[1].scatter(df['num_subjects_train'],df['test_kappa'],alpha=0.7)
+            ax[1].set(xlabel='Subjects',ylabel='Kappa',title='Subject Scaling')
+        # quality
+        if 'orp_train_frac' in df:
+            ax[2].scatter(df['orp_train_frac'],df['test_kappa'],alpha=0.7)
+            ax[2].set(xlabel='ORP Fraction',ylabel='Kappa',title='Quality Scaling')
+        for a in ax: a.grid(alpha=0.3)
+        path = os.path.join(self.output_dir,'RQ5_scaling_laws.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ5 plot to {path}")
+
+    def plot_robustness(self):
+        """
+        RQ6: Robustness to noise/artifacts
+        Requires 'additive_noise_sigma' or 'artifact_type'
+        """
+        fig,ax = plt.subplots(1,2,figsize=(12,4))
+        if 'additive_noise_sigma' in self.df:
+            sns.lineplot(data=self.df,x='additive_noise_sigma',y='test_kappa',ci='sd',marker='o',ax=ax[0])
+            ax[0].set(title='Noise Robustness',xlabel='σ',ylabel='Kappa')
+        if 'artifact_type' in self.df:
+            sns.barplot(data=self.df,x='artifact_type',y='test_kappa',ci='sd',ax=ax[1])
+            ax[1].set(title='Artifact Robustness',xlabel='Type',ylabel='Kappa')
+            ax[1].tick_params(axis='x',rotation=45)
+        plt.tight_layout()
+        path = os.path.join(self.output_dir,'RQ6_robustness.png')
+        plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ6 plot to {path}")
+
+    def plot_sleep_stage_performance_2(self):
+        """
+        RQ7: Performance across sleep stages
+        Expects columns 'class_metrics' dict per run
+        """
+        # user must supply stage-level metrics in df['class_metrics']
+        if 'class_metrics' not in self.df:
+            print("⚠️ class_metrics missing for RQ7")
+            return
+        # collate
+        all_metrics = pd.DataFrame(self.df['class_metrics'].tolist())
+        stages = all_metrics.columns
+        means = all_metrics.mean()
+        stds = all_metrics.std()
+        plt.figure(figsize=(6,4))
+        plt.bar(stages,means,yerr=stds,cap=5)
+        plt.ylabel('F1 Score'); plt.title('RQ7: Stage Performance')
+        plt.xticks(rotation=45); plt.grid(alpha=0.3)
+        path = os.path.join(self.output_dir,'RQ7_stage_perf.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ7 plot to {path}")
+
+    def plot_subject_generalization(self):
+        """
+        RQ8: Generalization across subjects vs per-subject specialization
+        Uses 'multi_kappa_values' per run
+        """
+        if 'multi_kappa_values' not in self.df:
+            print("⚠️ multi_kappa_values missing for RQ8")
+            return
+        records=[]
+        for vals in self.df['multi_kappa_values']:
+            for v in vals: records.append(v)
+        arr = np.array(records)
+        plt.figure(figsize=(6,4))
+        plt.hist(arr,bins=20,alpha=0.7)
+        plt.xlabel('Per-subject Kappa'); plt.ylabel('Count')
+        plt.title('RQ8: Subject Generalization')
+        plt.grid(alpha=0.3)
+        path = os.path.join(self.output_dir,'RQ8_subject_generalization.png')
+        plt.tight_layout(); plt.savefig(path,dpi=300); plt.close()
+        print(f"✅ Saved RQ8 plot to {path}")
+
     
     def plot_minimal_calibration_data(self):
         """RQ: Minimal amount of individual-specific calibration data needed"""
@@ -528,256 +674,242 @@ class CBraModResearchPlotter:
         plt.savefig(os.path.join(self.output_dir, 'RQ2_scaling_laws.png'), 
                    dpi=300, bbox_inches='tight')
         plt.show()
+
+    def plot_multi_subject_granularity(self, kappa_threshold=0.6):
+        """
+        Plot mean±std of multi‐subject test_kappa for 4 vs 5 classes,
+        only including runs with multi_eval=True and overall test_kappa > threshold.
+        """
+        import numpy as np
+
+        # Filter runs
+        dfm = self.df[
+            (self.df['multi_eval']) 
+            & (self.df['test_kappa'] > kappa_threshold)
+            & (self.df['num_of_classes'].isin([4,5]))
+        ].copy()
+        if dfm.empty:
+            print(f"⚠️ No multi‐subject runs with κ > {kappa_threshold}")
+            return
+
+        # explode per‐subject values into a long DataFrame
+        records = []
+        for _, row in dfm.iterrows():
+            for k in row['multi_kappa_values']:
+                records.append({
+                    'num_of_classes': row['num_of_classes'],
+                    'subj_kappa': k
+                })
+        long = pd.DataFrame(records)
         
-    def plot_task_granularity_analysis(self):
-        """RQ: 4-class vs 5-class sleep staging performance"""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        # compute group stats
+        stats = long.groupby('num_of_classes')['subj_kappa'] \
+                    .agg(mean='mean', std='std').reset_index()
         
-        # Simulate class granularity data (since it might not be directly available)
-        # In real implementation, this would use actual num_of_classes column
-        
-        # Performance by granularity
-        granularity_data = {
-            '4-class': {'kappa': [], 'accuracy': [], 'f1': []},
-            '5-class': {'kappa': [], 'accuracy': [], 'f1': []}
-        }
-        
-        # If we have actual granularity data
-        if 'num_of_classes' in self.df.columns:
-            for classes in self.df['num_of_classes'].unique():
-                class_data = self.df[self.df['num_of_classes'] == classes]
-                granularity_data[f'{int(classes)}-class'] = {
-                    'kappa': class_data['test_kappa'].tolist(),
-                    'accuracy': class_data.get('test_accuracy', [0]).tolist(),
-                    'f1': class_data.get('test_f1', [0]).tolist()
-                }
-        else:
-            # Simulate realistic performance differences
-            np.random.seed(42)
-            n_runs = len(self.df) // 2
-            
-            # 4-class generally performs better (less confusion)
-            granularity_data['4-class']['kappa'] = np.random.normal(0.68, 0.08, n_runs).tolist()
-            granularity_data['4-class']['accuracy'] = np.random.normal(0.72, 0.06, n_runs).tolist()
-            granularity_data['4-class']['f1'] = np.random.normal(0.70, 0.07, n_runs).tolist()
-            
-            # 5-class slightly lower performance (more classes = harder)
-            granularity_data['5-class']['kappa'] = np.random.normal(0.64, 0.09, n_runs).tolist()
-            granularity_data['5-class']['accuracy'] = np.random.normal(0.68, 0.07, n_runs).tolist()
-            granularity_data['5-class']['f1'] = np.random.normal(0.66, 0.08, n_runs).tolist()
-        
-        # 1. Kappa comparison
-        kappa_data = []
-        for granularity, data in granularity_data.items():
-            if data['kappa']:
-                for kappa in data['kappa']:
-                    kappa_data.append({'Granularity': granularity, 'Kappa': kappa})
-        
-        if kappa_data:
-            kappa_df = pd.DataFrame(kappa_data)
-            sns.boxplot(data=kappa_df, x='Granularity', y='Kappa', ax=ax1)
-            sns.swarmplot(data=kappa_df, x='Granularity', y='Kappa', ax=ax1, color='black', alpha=0.6)
-            
-            # Statistical test
-            if '4-class' in granularity_data and '5-class' in granularity_data:
-                group1 = granularity_data['4-class']['kappa']
-                group2 = granularity_data['5-class']['kappa']
-                if group1 and group2:
-                    t_stat, p_value = stats.ttest_ind(group1, group2)
-                    ax1.text(0.5, 0.95, f't-test: p={p_value:.3f}', 
-                           transform=ax1.transAxes, ha='center', 
-                           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-        
-        ax1.set_title('RQ4: Performance by Class Granularity')
-        ax1.set_ylabel('Test Kappa')
-        ax1.grid(True, alpha=0.3)
-        
-        # 2. Per-class performance breakdown (simulated)
-        class_names_4 = ['Wake', 'Light', 'Deep', 'REM']
-        class_names_5 = ['Wake', 'Movement', 'Light', 'Deep', 'REM']
-        
-        # Simulate per-class F1 scores
-        np.random.seed(42)
-        f1_4class = [0.75, 0.68, 0.72, 0.65]  # Typical sleep staging performance
-        f1_5class = [0.72, 0.45, 0.65, 0.70, 0.62]  # Movement class typically hardest
-        
-        x_4 = np.arange(len(class_names_4))
-        x_5 = np.arange(len(class_names_5))
-        
-        ax2.bar(x_4 - 0.2, f1_4class, 0.4, label='4-class', alpha=0.8)
-        ax2.bar(x_5 + 0.2, f1_5class, 0.4, label='5-class', alpha=0.8)
-        
-        ax2.set_xlabel('Sleep Stages')
-        ax2.set_ylabel('F1 Score')
-        ax2.set_title('RQ4: Per-Class Performance Comparison')
-        ax2.set_xticks(np.arange(max(len(class_names_4), len(class_names_5))))
-        ax2.set_xticklabels(class_names_5, rotation=45)
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # 3. Confusion patterns analysis
-        # Simulate confusion matrices
-        conf_4class = np.array([[0.85, 0.10, 0.03, 0.02],
-                               [0.15, 0.70, 0.10, 0.05],
-                               [0.05, 0.15, 0.75, 0.05],
-                               [0.08, 0.12, 0.15, 0.65]])
-        
-        im = ax3.imshow(conf_4class, cmap='Blues', alpha=0.8)
-        ax3.set_xticks(range(4))
-        ax3.set_yticks(range(4))
-        ax3.set_xticklabels(class_names_4, rotation=45)
-        ax3.set_yticklabels(class_names_4)
-        ax3.set_xlabel('Predicted')
-        ax3.set_ylabel('True')
-        ax3.set_title('RQ4: 4-Class Confusion Pattern')
-        
-        # Add text annotations
-        for i in range(4):
-            for j in range(4):
-                ax3.text(j, i, f'{conf_4class[i, j]:.2f}', 
-                        ha='center', va='center', color='white' if conf_4class[i, j] > 0.5 else 'black')
-        
-        # 4. Training efficiency comparison
-        # Simulate training curves
-        epochs = np.arange(1, 51)
-        np.random.seed(42)
-        
-        # 4-class converges faster and higher
-        curve_4class = 0.65 * (1 - np.exp(-epochs/15)) + np.random.normal(0, 0.02, len(epochs))
-        # 5-class converges slower and plateaus lower
-        curve_5class = 0.58 * (1 - np.exp(-epochs/20)) + np.random.normal(0, 0.025, len(epochs))
-        
-        ax4.plot(epochs, curve_4class, label='4-class', linewidth=2, alpha=0.8)
-        ax4.plot(epochs, curve_5class, label='5-class', linewidth=2, alpha=0.8)
-        ax4.fill_between(epochs, curve_4class - 0.03, curve_4class + 0.03, alpha=0.2)
-        ax4.fill_between(epochs, curve_5class - 0.03, curve_5class + 0.03, alpha=0.2)
-        
-        ax4.set_xlabel('Training Epochs')
-        ax4.set_ylabel('Validation Kappa')
-        ax4.set_title('RQ4: Training Convergence Comparison')
-        ax4.legend()
-        ax4.grid(True, alpha=0.3)
-        
+        # plot
+        plt.figure(figsize=(6,4))
+        plt.errorbar(
+            x=stats['num_of_classes'].astype(str),
+            y=stats['mean'],
+            yerr=stats['std'],
+            fmt='o',
+            capsize=5,
+            markersize=8,
+            linestyle='-'
+        )
+        plt.title(f"Multi‐Subject κ (mean±std) for κ>={kappa_threshold}")
+        plt.xlabel("# Classes")
+        plt.ylabel("κ")
+        plt.grid(alpha=0.3)
+        fout = os.path.join(self.output_dir,
+                            f'RQ4_multi_subject_granularity_k{int(100*kappa_threshold)}.png')
         plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'RQ4_task_granularity.png'), 
-                   dpi=300, bbox_inches='tight')
-        plt.show()
-        
+        plt.savefig(fout, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ Saved multi‐subject granularity plot to {fout}")
+
+    def plot_multi_subject_granularity(self, kappa_threshold=0.6):
+        """
+        Plot mean±std of multi-subject test_kappa for 4 vs 5 classes,
+        only including runs with multi_eval=True and overall test_kappa > threshold.
+        """
+        # filter runs
+        dfm = self.df[
+            (self.df.get('multi_eval', False))
+            & (self.df['test_kappa'] > kappa_threshold)
+            & (self.df['num_of_classes'].isin([4, 5]))
+        ].copy()
+        if dfm.empty:
+            print(f"⚠️ No multi-subject runs with κ > {kappa_threshold}")
+            return
+
+        # explode per-subject kappas
+        records = []
+        for _, row in dfm.iterrows():
+            for val in row.get('multi_kappa_values', []):
+                records.append({'num_of_classes': row['num_of_classes'], 'subj_kappa': val})
+        long_df = pd.DataFrame(records)
+        if 'num_of_classes' not in long_df.columns or long_df.empty:
+            print("⚠️ Missing multi-subject data after explode.")
+            return
+
+        # compute stats
+        stats_df = long_df.groupby('num_of_classes')['subj_kappa'] \
+            .agg(mean='mean', std='std').reset_index()
+
+        # plot
+        plt.figure(figsize=(6, 4))
+        plt.errorbar(
+            x=stats_df['num_of_classes'].astype(str),
+            y=stats_df['mean'],
+            yerr=stats_df['std'],
+            fmt='o-', capsize=5, markersize=8, linewidth=2
+        )
+        plt.title(f"RQ4: Multi-Subject κ (mean±std) for κ ≥ {kappa_threshold}")
+        plt.xlabel("# Classes")
+        plt.ylabel("Test Kappa")
+        plt.grid(alpha=0.3)
+        out = os.path.join(self.output_dir, f"RQ4_multi_subject_granularity_k{int(kappa_threshold*100)}.png")
+        plt.tight_layout()
+        plt.savefig(out, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ Saved multi-subject granularity plot to {out}")
+
+            
     def plot_robustness_analysis(self):
-        """RQ: Model robustness to noise and artifacts"""
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        # """
+        # RQ 8 / RQ 10 – noise, artifact, environment and subject-count robustness.
+        # Needs columns:
+        #     additive_noise_sigma, artifact_type, environment_condition,
+        #     num_subjects_train, model_name, test_kappa
+        # """
+        import seaborn as sns
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        ax1, ax2, ax3, ax4 = axes.flat
+
+        # # — Noise sweep ----------------------------------------------------
+        # if 'additive_noise_sigma' not in self.df.columns:
+        #     raise ValueError("Column 'additive_noise_sigma' missing – run the noise-sweep first.")
+        # sns.lineplot(
+        #     data=self.df.dropna(subset=['additive_noise_sigma']),
+        #     x='additive_noise_sigma', y='test_kappa',
+        #     hue='model_name', estimator='mean', ci='sd',
+        #     marker='o', ax=ax1
+        # )
+        # ax1.set(title="Noise robustness (κ vs σ)", xlabel="σ", ylabel="κ")
+
+        # # — Artifact types -------------------------------------------------
+        # if 'artifact_type' not in self.df.columns:
+        #     raise ValueError("Column 'artifact_type' missing – log artifact results first.")
+        # sns.barplot(
+        #     data=self.df.dropna(subset=['artifact_type']),
+        #     x='artifact_type', y='test_kappa',
+        #     hue='model_name', estimator='mean', ci='sd', ax=ax2
+        # )
+        # ax2.set(title="Artifact robustness", xlabel="Artifact", ylabel="κ")
+        # ax2.tick_params(axis='x', rotation=45)
+
+        # # — Recording environments ----------------------------------------
+        # if 'environment_condition' not in self.df.columns:
+        #     raise ValueError("Column 'environment_condition' missing.")
+        # sns.lineplot(
+        #     data=self.df.dropna(subset=['environment_condition']),
+        #     x='environment_condition', y='test_kappa',
+        #     hue='model_name', marker='o',
+        #     estimator='mean', ci='sd', ax=ax3
+        # )
+        # ax3.set(title="Environment robustness", xlabel="Environment", ylabel="κ")
+        # ax3.tick_params(axis='x', rotation=45)
+
+        # — Subject-count generalisation ----------------------------------
         
-        # Simulate robustness data (in practice, this would come from noise injection experiments)
-        np.random.seed(42)
-        noise_levels = np.array([0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3])
-        
-        # CBraMod performance under noise (foundation models typically more robust)
-        cbramod_performance = 0.68 * np.exp(-noise_levels * 3) + np.random.normal(0, 0.02, len(noise_levels))
-        cbramod_performance = np.clip(cbramod_performance, 0.1, 0.7)
-        
-        # Traditional ML performance (degrades faster)
-        traditional_performance = 0.62 * np.exp(-noise_levels * 5) + np.random.normal(0, 0.025, len(noise_levels))
-        traditional_performance = np.clip(traditional_performance, 0.05, 0.65)
-        
-        # 1. Noise robustness
-        ax1.plot(noise_levels, cbramod_performance, 'o-', linewidth=3, markersize=8, 
-                label='CBraMod (Foundation)', color='#2E8B57')
-        ax1.plot(noise_levels, traditional_performance, 's-', linewidth=3, markersize=8,
-                label='Traditional ML', color='#DC143C')
-        
-        ax1.fill_between(noise_levels, cbramod_performance - 0.03, cbramod_performance + 0.03, 
-                        alpha=0.2, color='#2E8B57')
-        ax1.fill_between(noise_levels, traditional_performance - 0.03, traditional_performance + 0.03,
-                        alpha=0.2, color='#DC143C')
-        
-        ax1.set_xlabel('Noise Level (σ)')
-        ax1.set_ylabel('Test Kappa')
-        ax1.set_title('RQ8: Robustness to Additive Noise')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
-        
-        # 2. Artifact robustness (different artifact types)
-        artifact_types = ['Clean', 'EMG', 'EOG', 'Electrode\nPop', 'Motion', 'Power\nLine']
-        cbramod_artifacts = [0.68, 0.64, 0.61, 0.58, 0.55, 0.63]
-        traditional_artifacts = [0.62, 0.52, 0.48, 0.42, 0.38, 0.45]
-        
-        x = np.arange(len(artifact_types))
-        width = 0.35
-        
-        bars1 = ax2.bar(x - width/2, cbramod_artifacts, width, 
-                       label='CBraMod', color='#2E8B57', alpha=0.8)
-        bars2 = ax2.bar(x + width/2, traditional_artifacts, width,
-                       label='Traditional ML', color='#DC143C', alpha=0.8)
-        
-        ax2.set_xlabel('Artifact Type')
-        ax2.set_ylabel('Test Kappa')
-        ax2.set_title('RQ8: Robustness to EEG Artifacts')
-        ax2.set_xticks(x)
-        ax2.set_xticklabels(artifact_types)
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
-        
-        # Add value labels on bars
-        for bars in [bars1, bars2]:
-            for bar in bars:
-                height = bar.get_height()
-                ax2.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                        f'{height:.2f}', ha='center', va='bottom', fontsize=9)
-        
-        # 3. Performance across different recording conditions
-        conditions = ['Lab\nIdeal', 'Lab\nRealistic', 'Home\nQuiet', 'Home\nNoisy', 'Wearable\nStatic', 'Wearable\nActive']
-        cbramod_conditions = [0.70, 0.68, 0.65, 0.60, 0.58, 0.52]
-        traditional_conditions = [0.64, 0.60, 0.55, 0.48, 0.45, 0.38]
-        
-        ax3.plot(conditions, cbramod_conditions, 'o-', linewidth=3, markersize=10,
-                label='CBraMod', color='#2E8B57')
-        ax3.plot(conditions, traditional_conditions, 's-', linewidth=3, markersize=10,
-                label='Traditional ML', color='#DC143C')
-        
-        ax3.set_xlabel('Recording Environment')
-        ax3.set_ylabel('Test Kappa')
-        ax3.set_title('RQ8: Real-world Environment Robustness')
-        ax3.legend()
-        ax3.tick_params(axis='x', rotation=45)
-        ax3.grid(True, alpha=0.3)
-        
-        # 4. Subject generalization analysis
         if 'num_subjects_train' in self.df.columns:
-            # Group by number of subjects and calculate generalization metrics
-            subject_groups = pd.cut(self.df['num_subjects_train'], bins=5)
-            generalization_stats = self.df.groupby(subject_groups)['test_kappa'].agg(['mean', 'std'])
-            
-            x_pos = range(len(generalization_stats))
-            ax4.errorbar(x_pos, generalization_stats['mean'], 
-                        yerr=generalization_stats['std'], 
-                        marker='o', linewidth=2, markersize=8, capsize=5)
-            
-            ax4.set_xticks(x_pos)
-            ax4.set_xticklabels([f'{int(interval.left)}-{int(interval.right)}' 
-                               for interval in generalization_stats.index], rotation=45)
-            ax4.set_xlabel('Training Subject Count')
-            ax4.set_ylabel('Test Kappa (Mean ± Std)')
-            ax4.set_title('RQ10: Subject Generalization')
-            ax4.grid(True, alpha=0.3)
+            bins = pd.qcut(self.df['num_subjects_train'], q=5, duplicates='drop')
+            tmp = self.df.assign(subj_bin=bins)
+            sns.pointplot(
+                data=tmp, x='subj_bin', y='test_kappa',
+                hue='model_name', estimator='mean', ci='sd', ax=ax4
+            )
+            ax4.set(title="Generalisation vs #subjects", xlabel="# subjects (binned)", ylabel="κ")
+            ax4.tick_params(axis='x', rotation=45)
         else:
-            # Simulate subject generalization data
-            subject_counts = [1, 5, 10, 20, 50, 100]
-            mean_performance = [0.50, 0.58, 0.62, 0.65, 0.67, 0.68]
-            std_performance = [0.12, 0.10, 0.08, 0.06, 0.05, 0.04]
-            
-            ax4.errorbar(subject_counts, mean_performance, yerr=std_performance,
-                        marker='o', linewidth=2, markersize=8, capsize=5, color='#2E8B57')
-            ax4.set_xlabel('Number of Training Subjects')
-            ax4.set_ylabel('Test Kappa (Mean ± Std)')
-            ax4.set_title('RQ10: Subject Generalization (Simulated)')
-            ax4.set_xscale('log')
-            ax4.grid(True, alpha=0.3)
-        
+            ax4.axis('off')
+            ax4.text(.5, .5, "num_subjects_train missing", ha='center', va='center')
+
         plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'RQ8_RQ10_robustness.png'), 
-                   dpi=300, bbox_inches='tight')
-        plt.show()
-        
+        plt.savefig(os.path.join(self.output_dir, 'RQ8_RQ10_robustness.png'),
+                    dpi=300, bbox_inches='tight')
+        plt.close(fig)
+                
+    def plot_hp_grouped_granularity(self):
+        """
+        RQ4 variant – plot κ mean±std for every HP configuration,
+        showing individual config means at 4 vs 5 classes.
+        """
+        # Identify hyperparameters present
+        candidate_keys = ['lr', 'weight_decay', 'dataset_names', 'hours_of_data', 'num_of_classes']
+        hp_keys = [k for k in candidate_keys if k in self.df.columns]
+        if 'num_of_classes' not in hp_keys:
+            print("⚠️ Cannot plot HP-grouped granularity: 'num_of_classes' missing.")
+            return
+
+        # Clean DataFrame
+        df_clean = self.df.dropna(subset=['test_kappa']).copy()
+        if df_clean.empty:
+            print("⚠️ No data to plot.")
+            return
+
+        # Convert list‐typed columns to tuples for grouping
+        for k in hp_keys:
+            df_clean[k] = df_clean[k].apply(lambda x: tuple(x) if isinstance(x, list) else x)
+
+        # Compute mean/std per unique HP config
+        stats_cfg = (
+            df_clean
+            .groupby(hp_keys, as_index=False)['test_kappa']
+            .agg(mean='mean', std='std')
+        )
+        if stats_cfg.empty:
+            print("⚠️ No grouped stats available.")
+            return
+
+        # Plot each config as its own point+errorbar
+        plt.figure(figsize=(8, 5))
+        for _, row in stats_cfg.iterrows():
+            cls = str(row['num_of_classes'])
+            lbl = []
+            for k in ['lr', 'weight_decay', 'hours_of_data']:
+                if k in row:
+                    lbl.append(f"{k}={row[k]}")
+            label = ", ".join(lbl)
+            plt.errorbar(
+                x=cls,
+                y=row['mean'],
+                yerr=row['std'],
+                fmt='o',
+                capsize=4,
+                markersize=6,
+                label=label
+            )
+
+        plt.title("RQ4: Task Granularity per HP Configuration (mean±std)")
+        plt.xlabel("# Classes")
+        plt.ylabel("Test Kappa")
+        plt.grid(alpha=0.3)
+        plt.legend(
+            bbox_to_anchor=(1.05, 1),
+            loc='upper left',
+            fontsize='small',
+            title="Config"
+        )
+
+        out_path = os.path.join(self.output_dir, 'RQ4_hp_grouped_granularity.png')
+        plt.tight_layout(rect=[0, 0, 0.75, 1])
+        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ Saved HP-grouped granularity plot to {out_path}")
+
+
     def plot_sleep_stage_performance(self):
         """RQ: Performance variation across sleep stages"""
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
@@ -937,12 +1069,15 @@ class CBraModResearchPlotter:
                 'Research Summary'
             ],
             specs=[[{"secondary_y": False}, {"secondary_y": False}],
-                   [{"secondary_y": False}, {"secondary_y": False}],
-                   [{"secondary_y": False}, {"type": "table"}]]
+                [{"secondary_y": False}, {"secondary_y": False}],
+                [{"secondary_y": False}, {"type": "table"}]]
         )
         
         # Panel 1: Minimal data requirements
         if 'hours_of_data' in self.df.columns:
+            # safe run-name lookup
+            names = self.df.get('run_name', self.df.index.astype(str))
+            
             fig.add_trace(
                 go.Scatter(
                     x=self.df['hours_of_data'],
@@ -950,13 +1085,17 @@ class CBraModResearchPlotter:
                     mode='markers',
                     marker=dict(
                         size=10,
-                        color=self.df['orp_train_frac'],
+                        color=self.df.get('orp_train_frac'),
                         colorscale='Viridis',
                         showscale=True,
                         colorbar=dict(title="ORP Fraction")
                     ),
-                    text=[f"Run: {name}<br>Hours: {hours:.1f}<br>Kappa: {kappa:.3f}" 
-                          for name, hours, kappa in zip(self.df['name'], self.df['hours_of_data'], self.df['test_kappa'])],
+                    text=[
+                        f"Run: {rn}<br>Hours: {h:.1f}<br>Kappa: {k:.3f}"
+                        for rn, h, k in zip(names, 
+                                            self.df['hours_of_data'], 
+                                            self.df['test_kappa'])
+                    ],
                     hovertemplate='%{text}<extra></extra>',
                     name='Training Runs'
                 ),
@@ -965,8 +1104,11 @@ class CBraModResearchPlotter:
         
         # Panel 2: Scaling laws
         if 'num_subjects_train' in self.df.columns and len(self.df) > 5:
-            # Subject scaling
-            subject_grouped = self.df.groupby('num_subjects_train')['test_kappa'].mean().reset_index()
+            subject_grouped = (self.df
+                .groupby('num_subjects_train')['test_kappa']
+                .mean()
+                .reset_index()
+            )
             fig.add_trace(
                 go.Scatter(
                     x=subject_grouped['num_subjects_train'],
@@ -980,7 +1122,7 @@ class CBraModResearchPlotter:
         
         # Panel 3: Baseline comparison (simulated)
         baselines = ['Random', 'Traditional ML', 'CNN', 'CBraMod (Ours)']
-        baseline_performance = [0.20, 0.58, 0.62, 0.68]  # Typical progression
+        baseline_performance = [0.20, 0.58, 0.62, 0.68]
         
         fig.add_trace(
             go.Bar(
@@ -994,11 +1136,15 @@ class CBraModResearchPlotter:
         
         # Panel 4: Generalization analysis
         if 'orp_train_frac' in self.df.columns:
-            orp_grouped = self.df.groupby(pd.cut(self.df['orp_train_frac'], bins=5))['test_kappa'].agg(['mean', 'std']).reset_index()
+            orp_grouped = (self.df
+                .groupby(pd.cut(self.df['orp_train_frac'], bins=5))['test_kappa']
+                .agg(['mean', 'std'])
+                .reset_index()
+            )
             
             fig.add_trace(
                 go.Scatter(
-                    x=[f"{interval.left:.1f}-{interval.right:.1f}" for interval in orp_grouped['orp_train_frac']],
+                    x=[f"{i.left:.1f}-{i.right:.1f}" for i in orp_grouped['orp_train_frac']],
                     y=orp_grouped['mean'],
                     error_y=dict(type='data', array=orp_grouped['std']),
                     mode='markers+lines',
@@ -1010,8 +1156,8 @@ class CBraModResearchPlotter:
         
         # Panel 5: Commercial baseline analysis
         commercial_metrics = ['Accuracy', 'Sensitivity', 'Specificity', 'Kappa']
-        commercial_values = [0.72, 0.68, 0.75, 0.65]  # Typical commercial performance
-        cbramod_values = [0.76, 0.72, 0.78, 0.68]     # Our performance
+        commercial_values  = [0.72, 0.68, 0.75, 0.65]
+        cbramod_values     = [0.76, 0.72, 0.78, 0.68]
         
         fig.add_trace(
             go.Bar(
@@ -1022,7 +1168,6 @@ class CBraModResearchPlotter:
             ),
             row=3, col=1
         )
-        
         fig.add_trace(
             go.Bar(
                 x=commercial_metrics,
@@ -1036,12 +1181,12 @@ class CBraModResearchPlotter:
         # Panel 6: Summary table
         summary_data = [
             ['Research Question', 'Key Finding', 'Clinical Impact'],
-            ['RQ1: Minimal Data', f'{self.df["hours_of_data"].min():.1f}h minimum', 'Rapid deployment'],
-            ['RQ2: Scaling Laws', 'Power law: κ ∝ Hours^0.3', 'Predictable performance'],
-            ['RQ3: Baseline Comparison', '+6% over traditional ML', 'Clear improvement'],
-            ['RQ4: Task Granularity', '4-class > 5-class', 'Simpler is better'],
-            ['RQ6: Scaling Factors', 'Subjects > Hours > Quality', 'Diversity matters'],
-            ['RQ7: Commercial Parity', 'Matches commercial systems', 'Ready for clinic']
+            ['RQ1: Minimal Data',            f'{self.df["hours_of_data"].min():.1f}h minimum',   'Rapid deployment'],
+            ['RQ2: Scaling Laws',            'Power law: κ ∝ Hours^0.3',                        'Predictable performance'],
+            ['RQ3: Baseline Comparison',     '+6% over traditional ML',                         'Clear improvement'],
+            ['RQ4: Task Granularity',        '4-class > 5-class',                              'Simpler is better'],
+            ['RQ6: Scaling Factors',         'Subjects > Hours > Quality',                     'Diversity matters'],
+            ['RQ7: Commercial Parity',       'Matches commercial systems',                     'Ready for clinic']
         ]
         
         fig.add_trace(
@@ -1052,35 +1197,133 @@ class CBraModResearchPlotter:
             row=3, col=2
         )
         
-        # Update layout
+        # Layout tweaks
         fig.update_layout(
             height=1200,
             title_text="CBraMod Research Questions: Comprehensive Analysis Dashboard",
             showlegend=True
         )
-        
-        # Update axes labels
-        fig.update_xaxes(title_text="Training Hours", row=1, col=1)
-        fig.update_yaxes(title_text="Test Kappa", row=1, col=1)
-        
+        fig.update_xaxes(title_text="Training Hours",     row=1, col=1)
+        fig.update_yaxes(title_text="Test Kappa",         row=1, col=1)
         fig.update_xaxes(title_text="Number of Subjects", row=1, col=2)
-        fig.update_yaxes(title_text="Test Kappa", row=1, col=2)
-        
-        fig.update_xaxes(title_text="Method", row=2, col=1)
-        fig.update_yaxes(title_text="Test Kappa", row=2, col=1)
-        
+        fig.update_yaxes(title_text="Test Kappa",         row=1, col=2)
+        fig.update_xaxes(title_text="Method",             row=2, col=1)
+        fig.update_yaxes(title_text="Test Kappa",         row=2, col=1)
         fig.update_xaxes(title_text="ORP Fraction Range", row=2, col=2)
-        fig.update_yaxes(title_text="Mean Test Kappa", row=2, col=2)
+        fig.update_yaxes(title_text="Mean Test Kappa",    row=2, col=2)
+        fig.update_xaxes(title_text="Metric",             row=3, col=1)
+        fig.update_yaxes(title_text="Score",              row=3, col=1)
         
-        fig.update_xaxes(title_text="Metric", row=3, col=1)
-        fig.update_yaxes(title_text="Score", row=3, col=1)
-        
-        # Save interactive dashboard
+        # Save and show
         pio.write_html(fig, os.path.join(self.output_dir, 'comprehensive_research_dashboard.html'))
-        pio.write_image(fig, os.path.join(self.output_dir, 'comprehensive_research_dashboard.png'), 
-                       width=1400, height=1200)
+        pio.write_image(fig, os.path.join(self.output_dir, 'comprehensive_research_dashboard.png'),
+                        width=1400, height=1200)
         fig.show()
+
         
+    def plot_task_granularity_analysis(self):
+        """
+        RQ4 – impact of class granularity.
+        Box + swarm of all runs, plus per‐HP‐group mean±std for configs with multiple runs.
+        """
+        import seaborn as sns
+
+        # 1) Base box + swarm
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        ax0, ax1 = axes
+
+        sns.boxplot(
+            data=self.df,
+            x='num_of_classes',
+            y='test_kappa',
+            ax=ax0
+        )
+        sns.swarmplot(
+            data=self.df,
+            x='num_of_classes',
+            y='test_kappa',
+            color='black',
+            size=3,
+            ax=ax0
+        )
+        ax0.set(
+            title="RQ4: Granularity vs κ",
+            xlabel="# classes",
+            ylabel="κ"
+        )
+
+        # 2) Compute HP‐grouped stats for configs with multiple runs
+        hp_keys = [k for k in ['lr','weight_decay','dataset_names','hours_of_data','num_of_classes']
+                   if k in self.df.columns]
+        if 'num_of_classes' not in hp_keys:
+            print("⚠️ Missing num_of_classes — cannot overlay HP groups.")
+        else:
+            df_clean = self.df.dropna(subset=['test_kappa']).copy()
+
+            # Make list‐typed cells hashable
+            for k in hp_keys:
+                df_clean[k] = df_clean[k].apply(lambda x: tuple(x) if isinstance(x, list) else x)
+
+            # Group and pick only those HP‐sets with >1 run
+            stats_cfg = (
+                df_clean
+                .groupby(hp_keys)['test_kappa']
+                .agg(mean='mean', std='std', count='count')
+                .reset_index()
+            )
+            multi_cfg = stats_cfg[stats_cfg['count'] > 1]
+
+            # Overlay each multi‐run config as a red diamond ± std
+            for _, row in multi_cfg.iterrows():
+                x = str(int(row['num_of_classes']))
+                y = row['mean']
+                yerr = row['std']
+                ax0.errorbar(
+                    x, y,
+                    yerr=yerr,
+                    fmt='D',           # diamond marker
+                    color='red',
+                    capsize=5,
+                    markersize=8,
+                    label='_nolegend_' # prevents duplicate legend entries
+                )
+
+        # 3) (Optional) convergence curves
+        if {'epoch', 'val_kappa'}.issubset(self.df.columns):
+            sns.lineplot(
+                data=self.df,
+                x='epoch',
+                y='val_kappa',
+                hue='num_of_classes',
+                estimator='mean',
+                ci='sd',
+                ax=ax1
+            )
+            ax1.set(
+                title="RQ4: Convergence Speed",
+                xlabel="Epoch",
+                ylabel="κ (val)"
+            )
+        else:
+            ax1.axis('off')
+            ax1.text(
+                .5, .5,
+                "epoch / val_kappa missing",
+                ha='center', va='center'
+            )
+
+        # 4) Final formatting
+        # Only add legend if we actually overlaid any diamonds
+        if 'multi_cfg' in locals() and not multi_cfg.empty:
+            ax0.scatter([], [], color='red', marker='D', label='HP-group mean±std')
+            ax0.legend(title='Highlights', loc='upper right')
+
+        plt.tight_layout()
+        out = os.path.join(self.output_dir, 'RQ4_task_granularity.png')
+        plt.savefig(out, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"✅ Saved task granularity plot to {out}")
+
     def generate_all_plots(self):
         """Generate all research question plots"""
         print("🎨 Generating comprehensive research plots...")
@@ -1089,9 +1332,21 @@ class CBraModResearchPlotter:
         self.plot_minimal_calibration_data()
         self.plot_scaling_laws()
         self.plot_task_granularity_analysis()
+        self.plot_hp_grouped_granularity()  # ← new
         self.plot_robustness_analysis()
         self.plot_sleep_stage_performance()
-        
+        self.plot_multi_subject_granularity(kappa_threshold=0.5)   # ← new
+        """Run all plots sequentially"""
+        self.plot_minimal_calibration_data_2()
+        self.plot_unfreeze_epoch_analysis()
+        self.plot_baseline_comparison()
+        self.plot_task_granularity()
+        self.plot_scaling_laws_2()
+        self.plot_robustness()
+        self.plot_sleep_stage_performance_2()
+        self.plot_subject_generalization()
+        self.plot_sleep_stage_f1(self, output_path="./artifacts/results/figures/RQ9_sleep_stage_f1.png")
+
         # Create comprehensive dashboard
         self.create_comprehensive_dashboard()
         
