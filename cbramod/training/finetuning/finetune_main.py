@@ -24,7 +24,27 @@ try:
 except ImportError:
     from finetune_tuner import run_optuna_tuning
 
-# 
+# for ReadMe:
+  # Train with NEW 4-class mapping (recommended)
+#   python cbramod/training/finetuning/finetune_main.py \
+#       --num_of_classes 4 \
+#       --label_mapping_version v1 \
+#       --epochs 50 \
+#       --run_name "4c-v1-test"
+
+#   # Train with LEGACY 4-class mapping (for comparison)
+#   python cbramod/training/finetuning/finetune_main.py \
+#       --num_of_classes 4 \
+#       --label_mapping_version v0 \
+#       --epochs 50 \
+#       --run_name "4c-v0-legacy"
+
+#   # Train with 5-class (always v1)
+#   python cbramod/training/finetuning/finetune_main.py \
+#       --num_of_classes 5 \
+#       --epochs 50 \
+#       --run_name "5c-standard"
+      
 def main(return_params=False):
     parser = argparse.ArgumentParser(description='Big model downstream')
     
@@ -98,6 +118,11 @@ def main(return_params=False):
                         help='Classification head architecture: ["simple", "deep", "attention"]')
     parser.add_argument('--use_focal_loss', action='store_true', 
                         help='Use Focal Loss instead of CrossEntropy for imbalanced EEG data (improves N1/REM recall)')
+    
+    # Label space versioning for W&B tracking
+    parser.add_argument('--label_mapping_version', type=str, default='v1', 
+                        choices=['v0', 'v1'],
+                        help='Label mapping version: v0=legacy(Awake=Wake+N1,Light=N2), v1=new(Awake=Wake,Light=N1+N2)')
     parser.add_argument('--focal_gamma', type=float, default=2.0,
                         help='Gamma parameter for Focal Loss (higher = more focus on hard examples)')
     parser.add_argument('--data_ORP', type=float, default=0.6,
@@ -114,17 +139,38 @@ def main(return_params=False):
     parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
     parser.add_argument('--preprocess', action='store_true', default=False,
                         help='If set, apply extra EEG preprocessing (notch harmonics, SG smoothing, etc.)')
-    # === In-Context (Prototypical) toggles ===
-    parser.add_argument('--icl_mode', type=str, default='none', choices=['none', 'proto'],
-                        help='In-context mode: none (baseline) or proto (prototypical head at eval)')
+    # === In-Context Learning (ICL) toggles ===
+    parser.add_argument('--icl_mode', type=str, default='none', choices=['none', 'proto', 'cnp', 'set'],
+                        help='In-context mode: none (baseline), proto (prototypical), cnp (DeepSets), set (Set Transformer)')
     parser.add_argument('--k_support', type=int, default=0,
                         help='Per-class support size K for prototypical eval (0 = baseline only)')
     parser.add_argument('--proto_temp', type=float, default=0.1,
                         help='Temperature for cosine similarities in proto head')
     parser.add_argument('--icl_eval_Ks', type=str, default='0,1,5,10',
                         help='Comma-separated list of K values to sweep at test time (e.g., "0,1,5,10")')
+    parser.add_argument('--icl_hidden', type=int, default=256,
+                        help='Hidden dimension for ICL heads (DeepSets/Set Transformer)')
+    parser.add_argument('--icl_layers', type=int, default=2,
+                        help='Number of layers for Set Transformer ICL head')
 
     params = parser.parse_args()
+    
+    # Validate and setup label mapping
+    if params.num_of_classes == 4:
+        if params.label_mapping_version == 'v0':
+            print("⚠️  Using LEGACY 4-class mapping: Awake=Wake+N1, Light=N2, Deep=N3, REM=REM")
+        elif params.label_mapping_version == 'v1':
+            print("✅ Using NEW 4-class mapping: Awake=Wake, Light=N1+N2, Deep=N3, REM=REM")
+    elif params.num_of_classes == 5:
+        print("ℹ️  Using 5-class mapping: Wake, N1, N2, N3, REM")
+        params.label_mapping_version = 'v1'  # 5-class is always v1
+    
+    # Add label space metadata for W&B tagging
+    params.label_space_tags = _generate_label_space_tags(params.num_of_classes, params.label_mapping_version)
+    params.label_space_description = _get_label_mapping_description(params.num_of_classes, params.label_mapping_version)
+    
+    print(f"\n🏷️  Label Mapping: {params.label_space_description}")
+    print(f"📋 W&B Tags: {params.label_space_tags}")
     
     # Automatically compute number of datasets
     params.dataset_names = [name.strip() for name in params.datasets.split(',')]
@@ -153,8 +199,12 @@ def main(return_params=False):
         load_dataset = idun_datasets.LoadDataset(params)
         seqs_labels_path_pair = load_dataset.get_all_pairs()
 
-        # Load once!
-        dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair, num_of_classes=params.num_of_classes)
+        # Load once with label mapping version
+        dataset = idun_datasets.MemoryEfficientKFoldDataset(
+            seqs_labels_path_pair, 
+            num_of_classes=params.num_of_classes,
+            label_mapping_version=getattr(params, 'label_mapping_version', 'v1')
+        )
 
         # Use single subject-level split
         fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42, orp_train_frac=params.data_ORP))
@@ -203,6 +253,44 @@ def setup_seed(seed):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
 
+
+def _generate_label_space_tags(num_classes, version):
+    """Generate W&B tags for label space versioning."""
+    tags = []
+    
+    if num_classes == 5:
+        tags = ['labelspace/train:5c']
+    elif num_classes == 4:
+        if version == 'v0':
+            tags = [
+                'labelspace/train:4c-v0',
+                'mapping/awake:wake+n1',
+                'mapping/light:n2', 
+                'version/legacy'
+            ]
+        elif version == 'v1':
+            tags = [
+                'labelspace/train:4c-v1',
+                'mapping/awake:wake',
+                'mapping/light:n1+n2',
+                'version/new'
+            ]
+    else:
+        tags = [f'labelspace/train:{num_classes}c-unknown']
+    
+    return tags
+
+def _get_label_mapping_description(num_classes, version):
+    """Get human-readable description of label mapping."""
+    if num_classes == 5:
+        return "5-class: Wake, N1, N2, N3, REM"
+    elif num_classes == 4:
+        if version == 'v0':
+            return "4-class v0 (legacy): Awake=Wake+N1, Light=N2, Deep=N3, REM=REM"
+        elif version == 'v1':
+            return "4-class v1 (new): Awake=Wake, Light=N1+N2, Deep=N3, REM=REM"
+    else:
+        return f"{num_classes}-class: Unknown mapping"
 
 if __name__ == '__main__':
     main()

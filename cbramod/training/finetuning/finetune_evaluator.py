@@ -3,10 +3,14 @@ import torch
 from sklearn.metrics import balanced_accuracy_score, f1_score, confusion_matrix, cohen_kappa_score, roc_auc_score, \
     precision_recall_curve, auc, r2_score, mean_squared_error
 from tqdm import tqdm
-try:
-    from torch.amp import autocast  # PyTorch >= 1.10
-except ImportError:
-    from torch.cuda.amp import autocast  # PyTorch < 1.10
+# CLAUDE-ENHANCEMENT: Unified AMP import for consistency
+from torch import amp
+
+# CLAUDE-COMMENTED-OUT: Old AMP import with try/except
+# try:
+#     from torch.amp import autocast  # PyTorch >= 1.10
+# except ImportError:
+#     from torch.cuda.amp import autocast  # PyTorch < 1.10
 
 
 class Evaluator:
@@ -36,15 +40,29 @@ class Evaluator:
             x = x.cuda()
             y = y.cuda()
 
-            if self.use_amp:
-                with autocast('cuda'):
-                    pred = model(x)
-            else:
+            # CLAUDE-ENHANCEMENT: Updated AMP usage for consistency
+            with amp.autocast('cuda', enabled=self.use_amp):
                 pred = model(x)
+                
+            # CLAUDE-COMMENTED-OUT: Old AMP usage
+            # if self.use_amp:
+            #     with autocast('cuda'):
+            #         pred = model(x)
+            # else:
+            #     pred = model(x)
             pred_y = torch.max(pred, dim=-1)[1]
 
-            truths += y.cpu().squeeze().numpy().tolist()
-            preds += pred_y.cpu().squeeze().numpy().tolist()
+            y_np = y.cpu().squeeze().numpy()
+            pred_y_np = pred_y.cpu().squeeze().numpy()
+            
+            # Ensure we have arrays, not scalars
+            if y_np.ndim == 0:
+                y_np = np.array([y_np])
+            if pred_y_np.ndim == 0:
+                pred_y_np = np.array([pred_y_np])
+                
+            truths += y_np.tolist()
+            preds += pred_y_np.tolist()
 
         truths = np.array(truths)
         preds = np.array(preds)

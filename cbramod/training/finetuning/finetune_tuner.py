@@ -34,7 +34,11 @@ def run_multi_eval(params, subjects):
 
         dataset_loader = idun_datasets.LoadDataset(config)
         seqs_labels_path_pair = dataset_loader.get_all_pairs()
-        dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair, num_of_classes=config.num_of_classes)
+        dataset = idun_datasets.MemoryEfficientKFoldDataset(
+            seqs_labels_path_pair, 
+            num_of_classes=config.num_of_classes,
+            label_mapping_version=getattr(config, 'label_mapping_version', 'v1')
+        )
 
         fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42, orp_train_frac=config.data_ORP))
         train_set = Subset(dataset, train_idx)
@@ -77,19 +81,20 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     params.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
     params.label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2, step=0.01)
     params.dropout = trial.suggest_float("dropout", 0.0, 0.5, step=0.05)
-    params.batch_size = trial.suggest_categorical("batch_size", [64, 128, 256, 512, 1024])
+    params.batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256, 512, 1024])
     params.clip_value = trial.suggest_float("clip_value", 0.0, 2.0, step=0.5)
     params.multi_lr = trial.suggest_categorical("multi_lr", [True, False])
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
     params.optimizer = trial.suggest_categorical("optimizer", ["AdamW","Lion"])
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
     params.head_type = trial.suggest_categorical("head_type", ["simple"]) #, "deep", "attention"
-    params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [False]) #True, 
+    params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [False]) #True,
+    params.epochs = trial.suggest_int("epochs", 5, 30) 
     if params.use_focal_loss:
         params.focal_gamma = trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5)
     else:
         params.focal_gamma = 2.0
-    params.data_ORP = trial.suggest_float("data_ORP", 0.55,0.6, step=0.1)
+    params.data_ORP = trial.suggest_float("data_ORP", 0.5 ,0.6, step=0.1)
     params.two_phase_training = trial.suggest_categorical("two_phase_training", [False]) #True, 
 
     if params.two_phase_training:
@@ -110,7 +115,11 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
 
     load_dataset = idun_datasets.LoadDataset(params)
     seqs_labels_path_pair = load_dataset.get_all_pairs()
-    dataset = idun_datasets.MemoryEfficientKFoldDataset(seqs_labels_path_pair, num_of_classes=params.num_of_classes) #, do_preprocess=params.preprocess)
+    dataset = idun_datasets.MemoryEfficientKFoldDataset(
+        seqs_labels_path_pair, 
+        num_of_classes=params.num_of_classes,
+        label_mapping_version=getattr(params, 'label_mapping_version', 'v1')
+    ) #, do_preprocess=params.preprocess)
     seed = trial.suggest_int("split_seed", 0, 10000)
     fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=seed, orp_train_frac=params.data_ORP))
 

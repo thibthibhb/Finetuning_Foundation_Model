@@ -47,7 +47,7 @@ def preprocess_epoch(epoch, sfreq):
             
     
 class MemoryEfficientKFoldDataset(Dataset):
-    def __init__(self, seqs_labels_path_pair, num_of_classes=5, do_preprocess: bool = False, sfreq: float = 200.0):
+    def __init__(self, seqs_labels_path_pair, num_of_classes=5, do_preprocess: bool = False, sfreq: float = 200.0, label_mapping_version='v1'):
         # ✨ store the flags on the object
         self.do_preprocess = do_preprocess
         self.sfreq = sfreq        
@@ -55,6 +55,16 @@ class MemoryEfficientKFoldDataset(Dataset):
         self.samples = []
         self.metadata = []
         self.num_of_classes = num_of_classes
+        self.label_mapping_version = label_mapping_version
+        
+        # Log the label mapping being used
+        if num_of_classes == 4:
+            if label_mapping_version == 'v0':
+                print(f"🏷️ Using 4-class LEGACY mapping (v0): Awake=Wake+N1, Light=N2, Deep=N3, REM=REM")
+            elif label_mapping_version == 'v1':
+                print(f"🏷️ Using 4-class NEW mapping (v1): Awake=Wake, Light=N1+N2, Deep=N3, REM=REM")
+        else:
+            print(f"🏷️ Using {num_of_classes}-class mapping: Wake, N1, N2, N3, REM")
 
         for seq_path, label_path in seqs_labels_path_pair:
             base = os.path.basename(seq_path)
@@ -141,16 +151,41 @@ class MemoryEfficientKFoldDataset(Dataset):
             raise ValueError(f"Invalid labels found: {sorted(invalid_labels)}. Expected range: [0, {expected_classes-1}]")
 
     def remap_label(self, l):
-        if l in [0, 1]:
-            return 0  # Wake
-        elif l == 2:
-            return 1  # Light
-        elif l == 3:
-            return 2  # Deep
-        elif l == 4:
-            return 3  # REM
+        """Remap 5-class labels to 4-class based on mapping version.
+        
+        Original 5-class: 0=Wake, 1=N1, 2=N2, 3=N3, 4=REM
+        
+        v0 (legacy): Awake=Wake+N1, Light=N2, Deep=N3, REM=REM
+        v1 (new):    Awake=Wake,    Light=N1+N2, Deep=N3, REM=REM
+        """
+        if self.label_mapping_version == 'v0':
+            # Legacy mapping: Awake=Wake+N1, Light=N2, Deep=N3, REM=REM
+            if l in [0, 1]:  # Wake + N1 -> Awake
+                return 0
+            elif l == 2:     # N2 -> Light  
+                return 1
+            elif l == 3:     # N3 -> Deep
+                return 2
+            elif l == 4:     # REM -> REM
+                return 3
+            else:
+                raise ValueError(f"Unknown label value: {l}")
+        
+        elif self.label_mapping_version == 'v1':
+            # New mapping: Awake=Wake, Light=N1+N2, Deep=N3, REM=REM
+            if l == 0:       # Wake -> Awake
+                return 0
+            elif l in [1, 2]: # N1 + N2 -> Light
+                return 1
+            elif l == 3:     # N3 -> Deep
+                return 2
+            elif l == 4:     # REM -> REM
+                return 3
+            else:
+                raise ValueError(f"Unknown label value: {l}")
+        
         else:
-            raise ValueError(f"Unknown label value: {l}")
+            raise ValueError(f"Unknown label_mapping_version: {self.label_mapping_version}")
 
     def __len__(self):
         return len(self.samples)

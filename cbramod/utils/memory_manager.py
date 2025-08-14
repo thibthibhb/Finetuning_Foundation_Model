@@ -11,7 +11,7 @@ import psutil
 import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,6 @@ class MemoryManager:
     def __init__(self, 
                  checkpoint_dir: str = "artifacts/models/finetuned",
                  max_checkpoints: int = 5,
-                 cleanup_older_than_days: int = 7,
                  memory_threshold_mb: float = 1000.0):
         """
         Initialize memory manager.
@@ -29,12 +28,10 @@ class MemoryManager:
         Args:
             checkpoint_dir: Directory containing model checkpoints
             max_checkpoints: Maximum number of checkpoints to keep per trial
-            cleanup_older_than_days: Remove checkpoints older than this many days
             memory_threshold_mb: Log warning if memory usage exceeds this (MB)
         """
         self.checkpoint_dir = Path(checkpoint_dir)
         self.max_checkpoints = max_checkpoints
-        self.cleanup_older_than_days = cleanup_older_than_days
         self.memory_threshold_mb = memory_threshold_mb
         self.initial_memory = None
         
@@ -52,9 +49,6 @@ class MemoryManager:
         
         # Force garbage collection
         self._force_garbage_collection()
-        
-        # Cleanup old checkpoints
-        self._cleanup_old_checkpoints()
         
         # Log memory status
         self._log_memory_status()
@@ -116,29 +110,6 @@ class MemoryManager:
         
         return True
     
-    def _cleanup_old_checkpoints(self):
-        """Remove checkpoints older than specified days."""
-        if not self.checkpoint_dir.exists():
-            return
-        
-        cutoff_time = datetime.now() - timedelta(days=self.cleanup_older_than_days)
-        
-        # Get all .pth files recursively
-        checkpoint_files = list(self.checkpoint_dir.rglob("*.pth"))
-        
-        removed_count = 0
-        for checkpoint_file in checkpoint_files:
-            try:
-                file_time = datetime.fromtimestamp(checkpoint_file.stat().st_mtime)
-                if file_time < cutoff_time:
-                    checkpoint_file.unlink()
-                    removed_count += 1
-                    logger.debug(f"Removed old checkpoint: {checkpoint_file.name}")
-            except OSError as e:
-                logger.warning(f"Failed to remove {checkpoint_file}: {e}")
-        
-        if removed_count > 0:
-            logger.info(f"Removed {removed_count} old checkpoint files")
     
     def start_memory_monitoring(self):
         """Start monitoring memory usage."""
