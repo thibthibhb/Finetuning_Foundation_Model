@@ -23,6 +23,27 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+
+# Colorblind-friendly palette (Okabe–Ito)
+OKABE_ITO = {
+    "blue": "#0072B2",
+    "orange": "#E69F00",
+    "green": "#009E73",
+    "vermillion": "#D55E00",
+    "purple": "#CC79A7",
+    "sky": "#56B4E9",
+    "yellow": "#F0E442",
+    "black": "#000000",
+}
+
+CB_COLORS = {
+    "yasa": OKABE_ITO["vermillion"],   # reddish
+    "cbramod": OKABE_ITO["blue"],      # strong blue
+    "improvement_pos": OKABE_ITO["green"],
+    "improvement_neg": OKABE_ITO["vermillion"],
+}
+
+
 def setup_plotting_style():
     """Configure matplotlib for publication-ready plots."""
     plt.style.use("default")
@@ -255,11 +276,18 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
     width = 0.35
     
     # Create grouped bars: YASA baseline vs CBraMod
-    bars_yasa = ax.bar(x_pos - width/2, yasa_baselines, width, 
-                       color='#A23B72', alpha=0.8, label='YASA Baseline', edgecolor='darkred')
-    
-    bars_cbramod = ax.bar(x_pos + width/2, cbramod_means, width,
-                          color='#2E86AB', alpha=0.8, label='CBraMod (T*)', edgecolor='darkblue')
+    bars_yasa = ax.bar(
+        x_pos - width/2, yasa_baselines, width,
+        color=CB_COLORS["yasa"], alpha=0.85, label="YASA Baseline",
+        edgecolor="black", linewidth=1
+    )
+
+    bars_cbramod = ax.bar(
+        x_pos + width/2, cbramod_means, width,
+        color=CB_COLORS["cbramod"], alpha=0.85, label="CBraMod (T*)",
+        edgecolor="black", linewidth=1, hatch="//"   # hatch pattern for redundancy
+    )
+
     
     # Add error bars for CBraMod (showing uncertainty in the improvement)
     valid_ci = ~(np.isnan(delta_cis_low) | np.isnan(delta_cis_high))
@@ -286,7 +314,7 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
             ax.annotate(f'+{delta:.2f}' if delta > 0 else f'{delta:.2f}',
                        xy=(i, y_pos), ha='center', va='bottom',
                        fontweight='bold', fontsize=11,
-                       color='green' if delta > 0 else 'red',
+                       color=CB_COLORS["improvement_pos"] if delta > 0 else CB_COLORS["improvement_neg"],
                        bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
     
     # Add statistical significance markers
@@ -319,7 +347,7 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
     ax.set_ylim(0, min(1.0, y_max))
     
     # Add horizontal line at 0.5 (good performance threshold)
-    ax.axhline(y=0.5, color='gray', linestyle=':', alpha=0.5, linewidth=1)
+    ax.axhline(y=0.5, color=OKABE_ITO["black"], linestyle='--', alpha=0.6, linewidth=1)
     ax.text(len(stages)-0.5, 0.52, 'Good Performance (F1=0.5)', 
            ha='right', va='bottom', fontsize=10, alpha=0.7)
     
@@ -328,13 +356,10 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
     # Save
     output_dir.mkdir(parents=True, exist_ok=True)
     fig_svg = output_dir / 'figure_3_stage_gains.svg'
-    fig_pdf = output_dir / 'figure_3_stage_gains.pdf'
     
     plt.savefig(fig_svg)
-    plt.savefig(fig_pdf)
     
     print(f"\nSaved: {fig_svg}")
-    print(f"Saved: {fig_pdf}")
     
     # Summary
     print(f"\nSummary at T*={t_star} subjects:")

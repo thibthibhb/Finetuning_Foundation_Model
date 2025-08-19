@@ -333,13 +333,10 @@ def create_figure_2(df: pd.DataFrame, output_dir: Path):
     # Save figure
     output_dir.mkdir(parents=True, exist_ok=True)
     fig_svg = output_dir / 'figure_2_win_rate_distribution.svg'
-    fig_pdf = output_dir / 'figure_2_win_rate_distribution.pdf'
     
     plt.savefig(fig_svg)
-    plt.savefig(fig_pdf)
     
     print(f"Saved: {fig_svg}")
-    print(f"Saved: {fig_pdf}")
     
     # Summary statistics
     print(f"\nSummary:")
