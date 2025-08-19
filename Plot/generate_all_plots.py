@@ -25,7 +25,7 @@ from Plot.sleep_stage_performance_analysis import SleepStagePerformanceAnalyzer
 
 def main():
     parser = argparse.ArgumentParser(description='Generate comprehensive CBraMod research plots')
-    parser.add_argument('--output-dir', default='./artifacts/results/figures',
+    parser.add_argument('--output-dir', default='./experiments/results/figures',
                        help='Output directory for plots')
     parser.add_argument('--entity', default='thibaut_hasle-epfl',
                        help='WandB entity name')
@@ -376,7 +376,7 @@ These plots are publication-ready and address:
 
 All plots can be regenerated using:
 ```bash
-python Plot/generate_all_plots.py --output-dir ./artifacts/results/figures
+python Plot/generate_all_plots.py --output-dir ./experiments/results/figures
 ```
 
 Generated on: $(date)

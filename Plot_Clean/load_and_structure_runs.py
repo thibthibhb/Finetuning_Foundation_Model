@@ -635,6 +635,171 @@ class QualityChecker:
         return True
 
 
+def _to_dict(x):
+    """Convert various formats to dictionary."""
+    import json
+    import ast
+    
+    if isinstance(x, dict):
+        return x
+    if isinstance(x, str):
+        # try JSON first, then Python literal
+        try:
+            return json.loads(x)
+        except Exception:
+            try:
+                return ast.literal_eval(x)
+            except Exception:
+                return {}
+    return {}
+
+def save_flat_versions(structured_runs: List[Dict], output_dir: Path, cohorts: Dict[str, List[Dict]]):
+    """Save flattened versions of structured runs for easy plotting."""
+    import pandas as pd
+    import json
+    
+    logger.info("Creating flattened CSVs with hyperparameters as columns...")
+    
+    df = pd.DataFrame(structured_runs)
+    
+    if df.empty:
+        logger.warning("No structured runs to flatten")
+        return
+    
+    # Ensure dicts (not strings) 
+    df["config"] = df["config"].apply(_to_dict)
+    df["summary"] = df["summary"].apply(_to_dict)
+    df["contract_data"] = df["contract_data"].apply(lambda x: x if isinstance(x, dict) else json.loads(str(x)) if x else {})
+    df["validation_status"] = df["validation_status"].apply(lambda x: x if isinstance(x, dict) else json.loads(str(x)) if x else {})
+    
+    # Flatten sections with clear prefixes
+    base_cols = ["run_id", "name", "state", "label_scheme", "duration_seconds", "tags"]
+    # Only include columns that exist
+    existing_base_cols = [col for col in base_cols if col in df.columns]
+    base = df[existing_base_cols]
+    
+    # Flatten nested dictionaries
+    cfg = pd.json_normalize(df["config"]).add_prefix("cfg.")
+    summ = pd.json_normalize(df["summary"]).add_prefix("sum.")
+    contract = pd.json_normalize(df["contract_data"]).add_prefix("contract.")
+    val = pd.json_normalize(df["validation_status"]).add_prefix("val.")
+    
+    # Combine all flattened data
+    flat = pd.concat([base, cfg, summ, contract, val], axis=1)
+    
+    # Create a subset with commonly used plotting columns
+    keep_patterns = [
+        "run_id", "name", "state", "label_scheme", "duration_seconds", "tags",
+        "contract.results.num_classes",
+        "contract.results.test_kappa", "contract.results.test_f1", "contract.results.test_accuracy",
+        "contract.results.hours_of_data",
+        "contract.dataset.num_subjects_train", "contract.dataset.data_fraction",
+        "contract.dataset.datasets", "contract.dataset.name", "contract.dataset.dataset_names",  # Added datasets info
+        "contract.training.batch_size", "contract.training.lr", "contract.training.head_lr", "contract.training.backbone_lr",
+        "contract.training.epochs", "contract.training.optimizer", "contract.training.scheduler",
+        "contract.training.weight_decay", "contract.training.label_smoothing",
+        "contract.training.unfreeze_epoch", "contract.model.frozen", "contract.training.use_amp",
+        "contract.icl.icl_mode", "contract.icl.k_support", "contract.icl.icl_layers", "contract.icl.icl_hidden",
+        "cfg.calib_nights", "cfg.nights_training", "cfg.nights_calibration",
+        "cfg.calib_minutes", "cfg.minutes_calib", "cfg.epoch_len",
+        "cfg.subject_id", "cfg.seed", "cfg.num_of_classes", "cfg.datasets",  # Added cfg.datasets
+        "sum.test_kappa", "sum.test_accuracy", "sum.test_f1", "sum.test_f1_macro",
+        "sum.hours_of_data", "sum._runtime"
+    ]
+    
+    # Include columns that exist and match our patterns
+    existing_cols = []
+    for pattern in keep_patterns:
+        if pattern in flat.columns:
+            existing_cols.append(pattern)
+        else:
+            # Try to find similar columns (fuzzy matching)
+            similar_cols = [col for col in flat.columns if any(part in col.lower() for part in pattern.lower().split('.')[-1].split('_'))]
+            if similar_cols and pattern not in existing_cols:
+                existing_cols.extend([col for col in similar_cols[:1] if col not in existing_cols])  # Add first match
+    
+    # Remove duplicates while preserving order
+    existing_cols = list(dict.fromkeys(existing_cols))
+    flat_plot = flat[existing_cols].copy()
+    
+    # Save main flat CSV
+    flat_path = output_dir / "all_runs_flat.csv"
+    flat_plot.to_csv(flat_path, index=False)
+    logger.info(f"Saved tidy plot CSV: {flat_path} ({len(flat_plot)} rows, {len(flat_plot.columns)} columns)")
+    
+    # Save per-cohort flat CSVs
+    if cohorts:
+        for cohort_name, cohort_runs in cohorts.items():
+            if not cohort_runs:
+                continue
+                
+            # Get run IDs for this cohort
+            cohort_run_ids = {run['run_id'] for run in cohort_runs}
+            
+            # Filter flat data to this cohort
+            cohort_flat = flat_plot[flat_plot['run_id'].isin(cohort_run_ids)]
+            
+            if not cohort_flat.empty:
+                cohort_flat_path = output_dir / f"cohort_{cohort_name}_flat.csv"
+                cohort_flat.to_csv(cohort_flat_path, index=False)
+                logger.info(f"Saved cohort '{cohort_name}' flat CSV: {cohort_flat_path} ({len(cohort_flat)} rows)")
+    
+    # Create a simple loader function as a text file for reference
+    loader_code = '''import pandas as pd
+
+def load_runs_flat(path="Plot_Clean/data/all_runs_flat.csv"):
+    """Load flattened runs data with convenience aliases."""
+    df = pd.read_csv(path)
+    
+    # Create convenience aliases for common columns
+    column_mappings = {
+        "contract.results.test_kappa": "test_kappa",
+        "contract.results.test_f1": "test_f1", 
+        "contract.results.test_accuracy": "test_accuracy",
+        "contract.results.num_classes": "num_classes",
+        "contract.results.hours_of_data": "hours_of_data",
+        "contract.dataset.num_subjects_train": "num_subjects_train",
+        "contract.dataset.datasets": "datasets",
+        "contract.training.epochs": "epochs",
+        "contract.training.batch_size": "batch_size",
+        "contract.training.lr": "lr",
+        "sum.test_kappa": "test_kappa",
+        "sum.test_f1": "test_f1",
+        "sum.test_accuracy": "test_accuracy", 
+        "cfg.num_of_classes": "num_classes",
+        "cfg.subject_id": "subject_id",
+        "cfg.datasets": "datasets"
+    }
+    
+    # Apply mappings for columns that exist
+    for old_name, new_name in column_mappings.items():
+        if old_name in df.columns and new_name not in df.columns:
+            df[new_name] = df[old_name]
+    
+    # Derive calibration nights/minutes from common keys
+    for c in ["cfg.calib_nights", "cfg.nights_training", "cfg.nights_calibration", "contract.dataset.calib_nights"]:
+        if c in df.columns and df[c].notna().any():
+            df["calib_nights"] = df[c]
+            break
+            
+    for c in ["cfg.calib_minutes", "cfg.minutes_calib", "contract.dataset.calib_minutes"]:
+        if c in df.columns and df[c].notna().any():
+            df["calib_minutes"] = df[c]
+            break
+    
+    return df
+
+# Example usage:
+# df = load_runs_flat()
+# df5 = df.query("num_classes == 5 and test_kappa.notna()")
+# print(df.columns)  # See all available columns
+'''
+    
+    loader_path = output_dir / "load_runs_flat.py"
+    with open(loader_path, 'w') as f:
+        f.write(loader_code)
+    logger.info(f"Saved convenience loader: {loader_path}")
+
 def create_contract_spec() -> ContractSpec:
     """Create the comparison contract specification."""
     return ContractSpec(
@@ -753,6 +918,10 @@ def main():
         
         for cohort_name, size in qa_report['cohort_sizes'].items():
             logger.info(f"Cohort '{cohort_name}': {size} runs")
+        
+        # Step 5: Create flattened CSVs for easy plotting
+        logger.info("=== Step 5: Creating Flattened CSVs for Plotting ===")
+        save_flat_versions(loader.structured_runs, output_dir, cohorts)
         
         logger.info(f"Data saved to: {output_dir}")
         logger.info("✅ Run loading and structuring completed successfully!")

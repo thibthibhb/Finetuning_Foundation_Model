@@ -52,8 +52,8 @@ def main():
     parser.add_argument('--mask_ratio', type=float, default=0.5)
     parser.add_argument('--dataset_dir', type=str, default='dataset_dir')
     parser.add_argument('--model_dir', type=str, default='model_dir')
-    parser.add_argument('--pretrained_path', type=str, default='pretrained_weights/pretrained_weights.pth')
-    parser.add_argument('--save_path', type=str, default='pretrained_weights/new_weights_unlabelled_batch128.pth')
+    parser.add_argument('--pretrained_path', type=str, default='saved_models/pretrained/pretrained_weights.pth')
+    parser.add_argument('--save_path', type=str, default='saved_models/pretrained/new_weights_unlabelled_batch128.pth')
     parser.add_argument('--freeze_layers', type=int, default=0,
                         help='Number of early transformer layers to freeze (0 to train all)')
     parser.add_argument('--use_weighted_sampler', action='store_true',

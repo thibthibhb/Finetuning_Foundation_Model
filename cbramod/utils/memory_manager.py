@@ -19,7 +19,7 @@ class MemoryManager:
     """Comprehensive memory management for training sessions."""
     
     def __init__(self, 
-                 checkpoint_dir: str = "artifacts/models/finetuned",
+                 checkpoint_dir: str = "saved_models/finetuned",
                  max_checkpoints: int = 5,
                  memory_threshold_mb: float = 1000.0):
         """

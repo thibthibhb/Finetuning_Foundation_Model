@@ -20,7 +20,7 @@ python run_optimized_finetuning.py --check-only
 ```bash
 # If you have pretrained weights, place them at:
 mkdir -p pretrained_weights
-# Copy your weights to: pretrained_weights/pretrained_weights.pth
+# Copy your weights to: saved_models/pretrained/pretrained_weights.pth
 
 # OR disable pretrained weights in config
 # Edit config/environments/finetuning_optimized.yaml:

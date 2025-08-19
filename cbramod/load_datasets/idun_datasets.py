@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from collections import defaultdict
 from sklearn.model_selection import GroupKFold
-from utils.util import to_tensor
+from cbramod.utils.util import to_tensor
 
 import numpy as np
 from scipy.signal import iirnotch, filtfilt, savgol_filter

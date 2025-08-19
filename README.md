@@ -54,14 +54,38 @@ pip install -r requirements.txt
 ## 🚢 How to Pretrain
 You can pretrain CBraMod on our pretraining dataset or your custom pretraining dataset using the following code:
 ```commandline
-python pretrain_main.py
+python cbramod/training/pretraining/pretrain_main.py
 ```
 We have released a pretrained checkpoint on [Hugginface🤗](https://huggingface.co/weighting666/CBraMod).
 
 ## ⛵ How to Finetune
-You can finetune CBraMod on our selected downstream datasets using the following code:
+
+### Standard Fine-tuning
 ```commandline
-python finetune_main.py
+# 4-class training with v1 mapping (recommended)
+python cbramod/training/finetuning/finetune_main.py \
+    --downstream_dataset IDUN_EEG \
+    --datasets_dir data/datasets/final_dataset \
+    --datasets ORP,2023_Open_N,2019_Open_N,2017_Open_N \
+    --use_pretrained_weights True \
+    --model_dir "./saved_models" \
+    --tune \
+    --num_of_classes 4 \
+    --multi_eval \
+    --label_mapping_version v1
+```
+
+### Two-Phase Training (Advanced)
+```commandline
+python cbramod/training/finetuning/finetune_main.py \
+    --two_phase_training True \
+    --epochs 15 \
+    --num_of_classes 4
+```
+
+### Inference
+```commandline
+python scripts/inference/Inference_local.py
 ```
 
 
@@ -75,7 +99,7 @@ from einops.layers.torch import Rearrange
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = CBraMod().to(device)
-model.load_state_dict(torch.load('pretrained_weights/pretrained_weights.pth', map_location=device))
+model.load_state_dict(torch.load('saved_models/pretrained/pretrained_weights.pth', map_location=device))
 model.proj_out = nn.Identity()
 classifier = nn.Sequential(
   Rearrange('b c s p -> b (c s p)'),
@@ -95,7 +119,40 @@ mock_eeg = torch.randn((8, 22, 4, 200)).to(device)
 logits = classifier(model(mock_eeg))
 ```
 
+## 📁 Directory Structure
 
+The codebase has been reorganized for clarity and maintainability:
+
+```
+CBraMod/
+├── cbramod/                    # Core module (main implementation)
+│   ├── models/                 # Model architectures (cbramod.py, criss_cross_transformer.py)
+│   ├── load_datasets/          # Dataset loaders (idun_datasets.py, enhanced_dataset.py)
+│   ├── preprocessing/          # EEG preprocessing pipelines
+│   ├── training/               # Training scripts (finetuning/, pretraining/)
+│   └── utils/                  # Utilities (signaltools.py, memory_manager.py)
+├── saved_models/               # Consolidated model storage
+│   ├── pretrained/            # Foundation model weights
+│   ├── finetuned/             # Best performing fine-tuned models
+│   └── production/            # Production-ready models
+├── experiments/               # Experiment tracking and results
+│   ├── logs/                  # Training logs
+│   ├── configs/               # Reproducibility configurations
+│   └── results/               # Analysis results and figures
+├── data/                      # EEG datasets
+│   └── datasets/              # Processed dataset files
+├── deploy_prod/               # Production deployment code
+├── scripts/                   # Utility scripts (inference, setup)
+├── docs/                      # Documentation
+├── Plot/                      # Research analysis plots
+└── Plot_Clean/                # Publication-ready plots
+```
+
+### Key Features
+- **Clean Structure**: Consolidated model storage and experiment tracking
+- **No Duplicates**: Removed scattered weights and logs across multiple directories  
+- **Easy Navigation**: Clear separation of concerns with logical grouping
+- **Production Ready**: Dedicated deployment and production model directories
 
 ## 🔗 Citation
 If you're using this repository in your research or applications, please cite using the following BibTeX:

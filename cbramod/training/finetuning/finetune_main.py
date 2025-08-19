@@ -81,7 +81,7 @@ def main(return_params=False):
                         default='/data/datasets/BigDownstream/Faced/processed',
                         help='datasets_dir')
     parser.add_argument('--num_of_classes', type=int, default=5, help='number of classes')
-    parser.add_argument('--model_dir', type=str, default='artifacts/models/pretrained/', help='model_dir')
+    parser.add_argument('--model_dir', type=str, default='saved_models/pretrained/', help='model_dir')
     """############ Downstream dataset settings ############"""
 
     parser.add_argument('--num_workers', type=int, default=8, help='num_workers')
@@ -93,7 +93,7 @@ def main(return_params=False):
     parser.add_argument('--use_pretrained_weights', type=bool,
                         default=True, help='use_pretrained_weights')
     parser.add_argument('--foundation_dir', type=str,
-                        default='./artifacts/models/pretrained/pretrained_weights.pth',
+                        default='./saved_models/pretrained/pretrained_weights.pth',
                         help='foundation_dir')
     parser.add_argument("--run_name", type=str, default="test", help="WandB run name prefix")
     parser.add_argument('--use_weighted_sampler', type=bool, default=False,
@@ -118,6 +118,8 @@ def main(return_params=False):
                         help='Classification head architecture: ["simple", "deep", "attention"]')
     parser.add_argument('--use_focal_loss', action='store_true', 
                         help='Use Focal Loss instead of CrossEntropy for imbalanced EEG data (improves N1/REM recall)')
+    parser.add_argument('--use_class_weights', action='store_true',
+                        help='Use automatic class weighting based on training data distribution (improves kappa for imbalanced data)')
     
     # Label space versioning for W&B tracking
     parser.add_argument('--label_mapping_version', type=str, default='v1', 
@@ -129,12 +131,12 @@ def main(return_params=False):
                     help='Fraction of ORP data to use in training set (e.g., 0.1, 0.3, 0.5, 0.6)')
     # Add plot directory
     parser.add_argument('--plot_dir', type=str,
-                        default='./artifacts/results/figures',
+                        default='./experiments/results/figures',
                         help='Directory for plots and figures')    
     # Performance optimization arguments
     parser.add_argument('--use_amp', action='store_true', default=False,
                     help='Use Automatic Mixed Precision training for faster training and reduced memory usage')
-    parser.add_argument('--results_dir', type=str, default='./artifacts/results', help='results directory')
+    parser.add_argument('--results_dir', type=str, default='./experiments/results', help='results directory')
     parser.add_argument('--multi_eval', action='store_true', help='Enable multi-subject evaluation for high-performing trials')
     parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
     parser.add_argument('--preprocess', action='store_true', default=False,

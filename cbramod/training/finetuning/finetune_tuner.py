@@ -61,8 +61,8 @@ def run_multi_eval(params, subjects):
     avg_kappa = mean([r['test_kappa'] for r in results])
     std_kappa = stdev([r['test_kappa'] for r in results])
 
-    os.makedirs("artifacts/results", exist_ok=True)
-    with open(f"artifacts/results/multi_eval_trial_results.json", "w") as f:
+    os.makedirs("experiments/results", exist_ok=True)
+    with open(f"experiments/results/multi_eval_trial_results.json", "w") as f:
         json.dump({
             "params": vars(params),
             "avg_kappa": avg_kappa,
@@ -87,15 +87,15 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     params.use_weighted_sampler = trial.suggest_categorical("use_weighted_sampler", [True, False])
     params.optimizer = trial.suggest_categorical("optimizer", ["AdamW","Lion"])
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
-    params.head_type = trial.suggest_categorical("head_type", ["simple"]) #, "deep", "attention"
-    params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [False]) #True,
-    params.epochs = trial.suggest_int("epochs", 5, 30) 
+    params.head_type = trial.suggest_categorical("head_type", ["simple", "deep", "attention"]) #, "deep", "attention"
+    params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [False, True]) #True,
+    params.datasets = trial.suggest_categorical("datasets", ["ORP", "ORP, 2023_Open_N", "ORP, 2019_Open_N", "ORP, 2017_Open_N", "ORP, 2023_Open_N, 2019_Open_N, 2017_Open_N"]) #, "IDUN_CBraMod"
     if params.use_focal_loss:
         params.focal_gamma = trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5)
     else:
         params.focal_gamma = 2.0
     params.data_ORP = trial.suggest_float("data_ORP", 0.5 ,0.6, step=0.1)
-    params.two_phase_training = trial.suggest_categorical("two_phase_training", [False]) #True, 
+    params.two_phase_training = trial.suggest_categorical("two_phase_training", [False, True]) #True, 
 
     if params.two_phase_training:
         params.phase1_epochs = trial.suggest_int("phase1_epochs", 2, 5)
@@ -108,8 +108,8 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
 
     params.foundation_dir = trial.suggest_categorical(
         "foundation_dir", [
-            "./artifacts/models/pretrained/BEST__loss10527.31.pth",
-            "./artifacts/models/pretrained/pretrained_weights.pth"
+            "./saved_models/pretrained/BEST__loss10527.31.pth",
+            "./saved_models/pretrained/pretrained_weights.pth"
         ]
     )
 

@@ -195,18 +195,7 @@ class Trainer(object):
                 self.icl_head = self.icl_head.to(device)
                 print(f"✅ Initialized ICL head ({self.icl_mode}) with z_dim={z_dim}, hidden={self.icl_hidden}")
         
-        # Loss function selection - Focal Loss for imbalanced EEG data or standard losses
-        if getattr(self.params, 'downstream_dataset', 'IDUN_EEG') in ['FACED', 'SEED-V', 'PhysioNet-MI', 'ISRUC', 'BCIC2020-3', 'TUEV', 'BCIC-IV-2a', 'IDUN_EEG']:
-            if getattr(self.params, 'use_focal_loss', False):
-                # Focal Loss for imbalanced sleep staging - helps with N1 and REM recall
-                focal_gamma = getattr(self.params, 'focal_gamma', 2.0)
-                self.criterion = FocalLoss(alpha=1.0, gamma=focal_gamma, reduction='mean').to(device)
-            else:
-                self.criterion = CrossEntropyLoss(label_smoothing=getattr(self.params, 'label_smoothing', 0.0)).to(device)
-        elif self.params.downstream_dataset in ['SHU-MI', 'CHB-MIT', 'Mumtaz2016', 'MentalArithmetic', 'TUAB']:
-            self.criterion = BCEWithLogitsLoss().to(device)
-        elif self.params.downstream_dataset == 'SEED-VIG':
-            self.criterion = MSELoss().to(device)
+        # Loss function will be initialized after class distribution is computed
 
         self.best_model_states = None
         self.best_val_cm = None
@@ -230,7 +219,7 @@ class Trainer(object):
         
         # Initialize memory manager
         self.memory_manager = MemoryManager(
-            checkpoint_dir=getattr(params, 'model_dir', './artifacts/models/finetuned')
+            checkpoint_dir=getattr(params, 'model_dir', './saved_models/finetuned')
         )
         backbone_params = []
         other_params = []
@@ -405,6 +394,9 @@ class Trainer(object):
         self.log_class_distribution(self.data_loader['val'], "val")
         self.log_class_distribution(self.data_loader['test'], "test")
 
+        # Initialize loss function with real class weights computed from training data
+        self._initialize_loss_function(device)
+
         # Initialize WandB with label space versioning
         self.wandb_run = None
         if getattr(self.params, 'use_wandb', True):
@@ -424,7 +416,7 @@ class Trainer(object):
                 tags=wandb_tags,
                 reinit=True,
                 name=self.params.run_name,
-                dir='./artifacts/experiments/wandb'
+                dir='./experiments/wandb'
             )
             
             # Log label mapping info as a summary
@@ -482,6 +474,76 @@ class Trainer(object):
         
         self.global_protos = torch.stack(protos)  # Keep on CPU
         print(f"✅ Computed global prototypes for {C} classes, shape: {self.global_protos.shape}")
+
+    # CLAUDE-ENHANCEMENT: Compute real class weights from training data
+    def _compute_class_weights(self, device):
+        """
+        Compute class weights using inverse frequency weighting from actual training data.
+        Uses the class_balance_ratio computed during initialization.
+        
+        Returns:
+            class_weights: torch.Tensor of shape [num_classes] on specified device, or None if disabled
+        """
+        # Check if class weighting is enabled
+        use_class_weights = getattr(self.params, 'use_class_weights', False)
+        if not use_class_weights:
+            print("📊 Class weighting disabled (use --use_class_weights to enable)")
+            return None
+            
+        # Check if external class weights were provided
+        external_weights = getattr(self.params, 'class_weights', None)
+        if external_weights is not None:
+            print(f"📊 Using provided class weights: {external_weights.cpu().numpy()}")
+            return external_weights.to(device)
+        
+        # Compute inverse frequency weights from real training data
+        if hasattr(self, 'class_balance_ratio') and self.class_balance_ratio:
+            num_classes = len(self.class_balance_ratio)
+            weights = torch.zeros(num_classes)
+            
+            # Inverse frequency weighting: weight = 1 / frequency
+            for class_id, frequency in self.class_balance_ratio.items():
+                weights[class_id] = 1.0 / frequency
+            
+            # Normalize weights so they sum to num_classes (standard practice)
+            weights = weights * num_classes / weights.sum()
+            
+            print(f"📊 Computed real class weights from training data:")
+            for class_id, (freq, weight) in enumerate(zip(self.class_balance_ratio.values(), weights)):
+                print(f"   Class {class_id}: freq={freq:.3f} -> weight={weight:.3f}")
+            
+            return weights.to(device)
+        else:
+            print("⚠️ No class distribution available, using equal weights")
+            return None
+
+    def _initialize_loss_function(self, device):
+        """Initialize loss function with proper class weighting based on dataset type."""
+        # Loss function selection - Focal Loss for imbalanced EEG data or standard losses
+        if getattr(self.params, 'downstream_dataset', 'IDUN_EEG') in ['FACED', 'SEED-V', 'PhysioNet-MI', 'ISRUC', 'BCIC2020-3', 'TUEV', 'BCIC-IV-2a', 'IDUN_EEG']:
+            if getattr(self.params, 'use_focal_loss', False):
+                # Focal Loss for imbalanced sleep staging - helps with N1 and REM recall
+                focal_gamma = getattr(self.params, 'focal_gamma', 2.0)
+                self.criterion = FocalLoss(alpha=1.0, gamma=focal_gamma, reduction='mean').to(device)
+                print(f"📊 Using Focal Loss with gamma={focal_gamma}")
+            else:
+                # Compute real class weights from training data distribution
+                class_weights = self._compute_class_weights(device)
+                self.criterion = CrossEntropyLoss(
+                    weight=class_weights,
+                    label_smoothing=getattr(self.params, 'label_smoothing', 0.0)
+                ).to(device)
+                
+                if class_weights is not None:
+                    print(f"📊 Using CrossEntropyLoss with real class weights and label_smoothing={getattr(self.params, 'label_smoothing', 0.0)}")
+                else:
+                    print(f"📊 Using standard CrossEntropyLoss (no class weights) with label_smoothing={getattr(self.params, 'label_smoothing', 0.0)}")
+        elif self.params.downstream_dataset in ['SHU-MI', 'CHB-MIT', 'Mumtaz2016', 'MentalArithmetic', 'TUAB']:
+            self.criterion = BCEWithLogitsLoss().to(device)
+            print("📊 Using BCEWithLogitsLoss for binary classification")
+        elif self.params.downstream_dataset == 'SEED-VIG':
+            self.criterion = MSELoss().to(device)
+            print("📊 Using MSELoss for regression")
 
     # CLAUDE-ENHANCEMENT: Extract features method for Proto ICL enhancement
     def _extract_features(self, x):
@@ -1054,7 +1116,7 @@ class Trainer(object):
             x, y = batch
             
         x, y = x.cuda(), y.cuda()
-        
+
         # Get unique classes in batch
         unique_classes = torch.unique(y)
         
@@ -1924,7 +1986,7 @@ class Trainer(object):
             api = wandb.Api()
             ENTITY = "thibaut_hasle-epfl"
             PROJECT = "CBraMod-earEEG-tuning"
-            PLOT_DIR = getattr(self.params, 'plot_dir', './artifacts/results/figures')
+            PLOT_DIR = getattr(self.params, 'plot_dir', './experiments/results/figures')
             os.makedirs(PLOT_DIR, exist_ok=True)
 
             runs = api.runs(f"{ENTITY}/{PROJECT}")
@@ -1947,7 +2009,7 @@ class Trainer(object):
                 })
 
             df = pd.DataFrame(records)
-            results_dir = getattr(self.params, 'results_dir', './artifacts/results')
+            results_dir = getattr(self.params, 'results_dir', './experiments/results')
             os.makedirs(results_dir, exist_ok=True)
             df.to_csv(f"{results_dir}/experiment_summary.csv", index=False)
             if not os.path.isdir(self.params.model_dir):

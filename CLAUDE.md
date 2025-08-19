@@ -56,7 +56,7 @@ The repository implements **CBraMod** (Criss-Cross Brain Foundation Model), an E
 ```python
 from cbramod.models.cbramod import CBraMod
 model = CBraMod()
-model.load_state_dict(torch.load('pretrained_weights/pretrained_weights.pth'))
+model.load_state_dict(torch.load('saved_models/pretrained/pretrained_weights.pth'))
 ```
 
 ### Training Parameters
@@ -81,7 +81,7 @@ model.load_state_dict(torch.load('pretrained_weights/pretrained_weights.pth'))
 ## Project Structure Notes
 - `artifacts/`: Training artifacts, logs, and results
 - `deploy_prod/`: Production deployment code and models  
-- `saved_models/`: Trained model checkpoints
+- `saved_models/`: Consolidated model storage (pretrained/, finetuned/, production/)
 - `data/datasets/`: EEG datasets (not tracked in git)
 - `Plot/`: Research plotting and analysis scripts
 - `docs/`: Documentation including quick start guide and memory management
