@@ -413,19 +413,22 @@ def plot_figure(stats_df: pd.DataFrame, subj_curves: Dict[str, Dict[str, List[fl
             ]),
             fmt="o-",
             color=CB_COLORS["median_curve"],
-            linewidth=2.5,
-            markersize=7,
-            markerfacecolor="white",
-            markeredgecolor=CB_COLORS["median_curve"],
-            capsize=5,
-            capthick=2,
+            linewidth=3.0,
+            markersize=9,
+            markerfacecolor=CB_COLORS["median_curve"],  # Fill the dots
+            markeredgecolor="white",  # White edge for contrast
+            markeredgewidth=2,
+            capsize=8,
+            capthick=3,
+            elinewidth=2.5,  # Make error bar lines thicker
             label="CBraMod median ± 95% CI",
             zorder=3,
         )
     else:
         ax.plot(stats_df["bin_center"], stats_df["kappa_median"], "o-",
-                color=CB_COLORS["median_curve"], linewidth=2.5, markersize=7,
-                markerfacecolor="white", markeredgecolor=CB_COLORS["median_curve"], zorder=3)
+                color=CB_COLORS["median_curve"], linewidth=3.0, markersize=9,
+                markerfacecolor=CB_COLORS["median_curve"], 
+                markeredgecolor="white", markeredgewidth=2, zorder=3)
 
     # YASA baseline line + band (vermillion + light alpha band)
     ax.axhline(y=yasa_kappa, color=CB_COLORS["yasa"], linestyle="--", linewidth=2.5,
@@ -572,9 +575,12 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
                     dataset_data.loc[valid_ci, 'median_kappa'] - dataset_data.loc[valid_ci, 'ci_low'],
                     dataset_data.loc[valid_ci, 'ci_high'] - dataset_data.loc[valid_ci, 'median_kappa']
                 ],
-                fmt='o', color=color, markersize=7,
-                markerfacecolor="white", markeredgecolor=color,
-                capsize=4, capthick=1.5, label=dataset_comp, zorder=3
+                fmt='o', color=color, markersize=8,
+                markerfacecolor=color,  # Fill the dots
+                markeredgecolor="white",  # White edge for contrast
+                markeredgewidth=2,
+                capsize=6, capthick=2.5, elinewidth=2,
+                label=dataset_comp, zorder=3
             )
 
         missing_ci = ~valid_ci
@@ -582,8 +588,10 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
             ax.plot(
                 dataset_data.loc[missing_ci, 'num_subjects'],
                 dataset_data.loc[missing_ci, 'median_kappa'],
-                'o', color=color, markersize=7,
-                markerfacecolor="white", markeredgecolor=color,
+                'o', color=color, markersize=8,
+                markerfacecolor=color,  # Fill the dots
+                markeredgecolor="white",  # White edge for contrast
+                markeredgewidth=2,
                 label=dataset_comp if not valid_ci.any() else "", zorder=3
             )
 
@@ -641,7 +649,7 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
 def main():
     ap = argparse.ArgumentParser(description='Generate comprehensive CBraMod calibration plot')
     ap.add_argument("--csv", required=True, help="Path to flattened CSV (e.g., all_runs_flat.csv)")
-    ap.add_argument("--out", default="artifacts/results/figures/paper", help="Output directory")
+    ap.add_argument("--out", default="Plot_Clean/figures/fig1", help="Output directory")
     args = ap.parse_args()
 
     setup_plotting_style()

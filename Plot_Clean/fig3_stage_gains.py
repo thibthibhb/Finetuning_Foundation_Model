@@ -395,7 +395,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate Figure 3: Per-Stage Performance Gains')
     parser.add_argument("--csv", required=True, help="Path to flattened CSV")
     parser.add_argument("--t-star", type=int, default=45, help="T* threshold (number of subjects)")
-    parser.add_argument("--out", default="artifacts/results/figures/paper", help="Output directory")
+    parser.add_argument("--out", default="Plot_Clean/figures/fig3", help="Output directory")
     args = parser.parse_args()
 
     setup_plotting_style()

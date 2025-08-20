@@ -78,7 +78,7 @@ def main(return_params=False):
     parser.add_argument('--downstream_dataset', type=str, default='IDUN_EEG',
                         help='[FACED, SEED-V, PhysioNet-MI, SHU-MI, ISRUC, CHB-MIT, BCIC2020-3, Mumtaz2016, SEED-VIG, MentalArithmetic, TUEV, TUAB, BCIC-IV-2a]')
     parser.add_argument('--datasets_dir', type=str,
-                        default='/data/datasets/BigDownstream/Faced/processed',
+                        default='data/datasets/final_dataset',
                         help='datasets_dir')
     parser.add_argument('--num_of_classes', type=int, default=5, help='number of classes')
     parser.add_argument('--model_dir', type=str, default='saved_models/pretrained/', help='model_dir')

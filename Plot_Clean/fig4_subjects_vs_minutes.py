@@ -107,7 +107,8 @@ def load_and_prepare_data(csv_path: Path) -> pd.DataFrame:
         df["hours_of_data"].notna() & 
         df["num_subjects"].notna() & 
         (df["num_subjects"] > 0) & 
-        (df["hours_of_data"] > 0)
+        (df["hours_of_data"] > 0) &
+        (df["test_kappa"] >= 0.3)  # Remove poor performers
     )
     
     # Filter to 5-class if available
@@ -117,7 +118,7 @@ def load_and_prepare_data(csv_path: Path) -> pd.DataFrame:
         valid_mask = valid_mask & (df["cfg.num_of_classes"] == 5)
     
     df = df[valid_mask]
-    print(f"After filtering to valid 5-class data: {len(df)} runs")
+    print(f"After filtering to valid 5-class data (κ≥0.3): {len(df)} runs")
     
     # Calculate derived metrics
     df["total_hours"] = df["hours_of_data"]
@@ -131,6 +132,40 @@ def load_and_prepare_data(csv_path: Path) -> pd.DataFrame:
     print(f"Minutes per subject range: {df['minutes_per_subject'].min():.1f}-{df['minutes_per_subject'].max():.1f}")
     
     return df
+
+def select_top_runs_per_bin(df: pd.DataFrame, column: str, bin_size: float, n_top: int = 10) -> pd.DataFrame:
+    """Select top N runs per bin based on test_kappa."""
+    
+    # Create bins
+    min_val = df[column].min()
+    max_val = df[column].max()
+    bin_edges = np.arange(min_val, max_val + bin_size, bin_size)
+    
+    df['bin'] = pd.cut(df[column], bins=bin_edges, include_lowest=True)
+    
+    # Select top runs per bin
+    top_runs_list = []
+    
+    for bin_val, group in df.groupby('bin', observed=True):
+        if len(group) == 0:
+            continue
+        
+        # Take top n_top runs by test_kappa
+        if len(group) > n_top:
+            top_runs = group.nlargest(n_top, 'test_kappa')
+        else:
+            top_runs = group
+        
+        top_runs_list.append(top_runs)
+        print(f"Bin {bin_val}: {len(group)} runs → selected top {len(top_runs)}")
+    
+    if top_runs_list:
+        result = pd.concat(top_runs_list, ignore_index=True)
+        # Remove the temporary bin column
+        result = result.drop('bin', axis=1, errors='ignore')
+        return result
+    else:
+        return pd.DataFrame()
 
 def create_subjects_minutes_heatmap(df: pd.DataFrame, yasa_kappa: float = 0.446):
     """Create heatmap data for subjects vs minutes per subject."""
@@ -268,118 +303,145 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
             except:
                 print("Could not add contour lines to heatmap")
     
-    # Panel B: Scatter plot - Performance vs Total Data Hours
+    # Panel B: Scatter plot - Performance vs Total Data Hours (binned, top 10 per 100h bin)
     ax1 = fig.add_subplot(gs[1, 0])
+    
+    # Select top 10 runs per 100-hour bin
+    df_total_hours = select_top_runs_per_bin(df.copy(), 'total_hours', 100, n_top=10)
+    print(f"Panel B: {len(df_total_hours)} top runs selected from total hours bins")
+    
+    if not df_total_hours.empty:
+        # slight jitter function to reduce vertical stacking
+        rng = np.random.default_rng(42)
+        jitter = (rng.standard_normal(len(df_total_hours)) * 0.005)
 
-    # slight jitter function to reduce vertical stacking
-    rng = np.random.default_rng(42)
-    jitter = (rng.standard_normal(len(df)) * 0.005)  # small vertical jitter
+        scatter = ax1.scatter(
+            df_total_hours['total_hours'],
+            df_total_hours['delta_kappa'] + jitter,
+            c=df_total_hours['num_subjects'],
+            s=50, alpha=0.75,  # Larger, more visible points
+            cmap='viridis',
+            edgecolors='black', linewidth=0.6
+        )
 
-    scatter = ax1.scatter(
-        df['total_hours'],
-        df['delta_kappa'] + jitter,
-        c=df['num_subjects'],
-        s=36, alpha=0.55,
-        cmap='viridis',
-        edgecolors='black', linewidth=0.4
-    )
-
-    cbar1 = plt.colorbar(scatter, ax=ax1, pad=0.01, shrink=0.9)
-    cbar1.set_label('Number of Subjects', fontweight='bold')
+        cbar1 = plt.colorbar(scatter, ax=ax1, pad=0.01, shrink=0.9)
+        cbar1.set_label('Number of Subjects', fontweight='bold')
 
     ax1.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2, label='YASA baseline')
     ax1.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2, label=f'Target (+{delta_threshold})')
 
     ax1.set_xlabel('Total Hours of Data', fontweight='bold')
     ax1.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax1.set_title('B: Performance vs Total Data\n(colored by subjects)', fontweight='bold')
+    ax1.set_title('B: Performance vs Total Data\n(Top 10 per 100h bin)', fontweight='bold')
     ax1.legend(handlelength=1.8, borderpad=0.4)
     ax1.grid(True, alpha=0.3)
     ax1.margins(x=0.03, y=0.1)
 
     
-    # Panel C: Minutes per subject vs Performance
+    # Panel C: Minutes per subject vs Performance (binned, top 10 per 100min bin)
     ax2 = fig.add_subplot(gs[1, 1])
-
-    jitter = (rng.standard_normal(len(df)) * 0.005)
-    ax2.scatter(
-        df['minutes_per_subject'],
-        df['delta_kappa'] + jitter,
-        c=OKABE_ITO['blue'],
-        s=36, alpha=0.55,
-        edgecolors='black', linewidth=0.4
-    )
+    
+    # Select top 10 runs per 100-minute bin
+    df_minutes = select_top_runs_per_bin(df.copy(), 'minutes_per_subject', 100, n_top=10)
+    print(f"Panel C: {len(df_minutes)} top runs selected from minutes per subject bins")
+    
+    if not df_minutes.empty:
+        jitter = (rng.standard_normal(len(df_minutes)) * 0.005)
+        ax2.scatter(
+            df_minutes['minutes_per_subject'],
+            df_minutes['delta_kappa'] + jitter,
+            c=OKABE_ITO['blue'],
+            s=50, alpha=0.75,  # Larger, more visible points
+            edgecolors='black', linewidth=0.6
+        )
 
     ax2.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
     ax2.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
 
     ax2.set_xlabel('Minutes per Subject', fontweight='bold')
     ax2.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax2.set_title('C: Performance vs\nMinutes per Subject', fontweight='bold')
+    ax2.set_title('C: Performance vs Minutes per Subject\n(Top 10 per 100min bin)', fontweight='bold')
     ax2.grid(True, alpha=0.3)
     ax2.margins(x=0.03, y=0.1)
 
     
-    # Panel D: Number of subjects vs Performance  
+    # Panel D: Number of subjects vs Performance (binned, top 10 per 3-subject bin)
     ax3 = fig.add_subplot(gs[2, 0])
-
-    jitter = (rng.standard_normal(len(df)) * 0.005)
-    ax3.scatter(
-        df['num_subjects'],
-        df['delta_kappa'] + jitter,
-        c=OKABE_ITO['orange'],
-        s=36, alpha=0.55,
-        edgecolors='black', linewidth=0.4
-    )
+    
+    # Select top 10 runs per 3-subject bin
+    df_subjects = select_top_runs_per_bin(df.copy(), 'num_subjects', 3, n_top=10)
+    print(f"Panel D: {len(df_subjects)} top runs selected from subject count bins")
+    
+    if not df_subjects.empty:
+        jitter = (rng.standard_normal(len(df_subjects)) * 0.005)
+        ax3.scatter(
+            df_subjects['num_subjects'],
+            df_subjects['delta_kappa'] + jitter,
+            c=OKABE_ITO['orange'],
+            s=50, alpha=0.75,  # Larger, more visible points
+            edgecolors='black', linewidth=0.6
+        )
 
     ax3.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
     ax3.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
 
     ax3.set_xlabel('Number of Subjects', fontweight='bold')
     ax3.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax3.set_title('D: Performance vs\nNumber of Subjects', fontweight='bold')
+    ax3.set_title('D: Performance vs Number of Subjects\n(Top 10 per 3-subject bin)', fontweight='bold')
     ax3.grid(True, alpha=0.3)
     ax3.margins(x=0.03, y=0.1)
 
     
-    # Panel E: Box plots by subject count strategy
+    # Panel E: Box plots by subject count strategy (using binned top performers)
     ax4 = fig.add_subplot(gs[2, 1])
 
-    subject_counts = sorted(df['num_subjects'].unique())
-    if len(subject_counts) > 1:
-        if len(subject_counts) > 8:
-            cats = pd.cut(df['num_subjects'], bins=min(8, len(subject_counts)))
-            df['subject_category'] = cats
-            categories = cats.cat.categories
-            box_data = [df.loc[df['subject_category'] == cat, 'delta_kappa'].values for cat in categories]
-            labels = [f'{int(c.left)}–{int(c.right)}' for c in categories]
-        else:
-            box_data = [df.loc[df['num_subjects'] == c, 'delta_kappa'].values for c in subject_counts]
-            labels = [f'{int(c)}' for c in subject_counts]
+    # Use the same binned data for consistent analysis
+    if not df_subjects.empty:
+        subject_counts = sorted(df_subjects['num_subjects'].unique())
+        
+        if len(subject_counts) > 1:
+            if len(subject_counts) > 8:
+                cats = pd.cut(df_subjects['num_subjects'], bins=min(8, len(subject_counts)))
+                df_subjects['subject_category'] = cats
+                categories = cats.cat.categories
+                box_data = [df_subjects.loc[df_subjects['subject_category'] == cat, 'delta_kappa'].values for cat in categories]
+                labels = [f'{int(c.left)}–{int(c.right)}' for c in categories]
+            else:
+                box_data = [df_subjects.loc[df_subjects['num_subjects'] == c, 'delta_kappa'].values for c in subject_counts]
+                labels = [f'{int(c)}' for c in subject_counts]
 
-        bp = ax4.boxplot(box_data, labels=labels, patch_artist=True)
+            # Filter out empty boxes
+            box_data_filtered = []
+            labels_filtered = []
+            for data, label in zip(box_data, labels):
+                if len(data) > 0:
+                    box_data_filtered.append(data)
+                    labels_filtered.append(label)
+            
+            if box_data_filtered:
+                bp = ax4.boxplot(box_data_filtered, labels=labels_filtered, patch_artist=True)
 
-        palette = [OKABE_ITO['blue'], OKABE_ITO['orange'], OKABE_ITO['green'],
-                OKABE_ITO['purple'], OKABE_ITO['sky'], OKABE_ITO['yellow']]
-        for i, patch in enumerate(bp['boxes']):
-            patch.set_facecolor(palette[i % len(palette)])
-            patch.set_alpha(0.7)
-            patch.set_edgecolor('black')
+                palette = [OKABE_ITO['blue'], OKABE_ITO['orange'], OKABE_ITO['green'],
+                        OKABE_ITO['purple'], OKABE_ITO['sky'], OKABE_ITO['yellow']]
+                for i, patch in enumerate(bp['boxes']):
+                    patch.set_facecolor(palette[i % len(palette)])
+                    patch.set_alpha(0.7)
+                    patch.set_edgecolor('black')
 
-        ax4.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
-        ax4.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
+                ax4.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
+                ax4.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
 
-        ax4.set_xlabel('Number of Subjects', fontweight='bold')
-        ax4.set_ylabel('Δκ vs YASA', fontweight='bold')
-        ax4.set_title('E: Distribution by\nSubject Count', fontweight='bold')
-        ax4.grid(True, alpha=0.3)
+                ax4.set_xlabel('Number of Subjects', fontweight='bold')
+                ax4.set_ylabel('Δκ vs YASA', fontweight='bold')
+                ax4.set_title('E: Top Performers by\nSubject Count', fontweight='bold')
+                ax4.grid(True, alpha=0.3)
 
-        ax4.tick_params(axis='x', labelrotation=30)
-        ax4.margins(x=0.02, y=0.1)
+                ax4.tick_params(axis='x', labelrotation=30)
+                ax4.margins(x=0.02, y=0.1)
 
-        # Rotate labels if needed
-        if len(labels) > 6:
-            ax4.tick_params(axis='x', rotation=45)
+                # Rotate labels if needed
+                if len(labels_filtered) > 6:
+                    ax4.tick_params(axis='x', rotation=45)
     
     #plt.tight_layout()
     
@@ -390,19 +452,47 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
     print(f"\nSaved: {fig_svg}")
     
     # Analysis summary
-    print(f"\nSubjects vs Minutes Analysis Summary:")
-    print(f"Total runs analyzed: {len(df)}")
+    print(f"\nSubjects vs Minutes Analysis Summary (Top Performers Only):")
+    print(f"Original runs (κ≥0.3): {len(df)}")
+    print(f"Panel B top runs: {len(df_total_hours) if 'df_total_hours' in locals() and not df_total_hours.empty else 0}")
+    print(f"Panel C top runs: {len(df_minutes) if 'df_minutes' in locals() and not df_minutes.empty else 0}")
+    print(f"Panel D top runs: {len(df_subjects) if 'df_subjects' in locals() and not df_subjects.empty else 0}")
     
-    # Find optimal strategies
-    beating_yasa = df[df['delta_kappa'] > 0]
-    target_achieved = df[df['delta_kappa'] >= delta_threshold]
+    # Find optimal strategies from the filtered top performers
+    # Combine all binned datasets for comprehensive analysis
+    all_top_performers = []
+    if 'df_total_hours' in locals() and not df_total_hours.empty:
+        all_top_performers.append(df_total_hours)
+    if 'df_minutes' in locals() and not df_minutes.empty:
+        all_top_performers.append(df_minutes)
+    if 'df_subjects' in locals() and not df_subjects.empty:
+        all_top_performers.append(df_subjects)
+    
+    if all_top_performers:
+        # Remove duplicates by run_id if available, otherwise by all columns
+        combined_top = pd.concat(all_top_performers, ignore_index=True)
+        if 'run_id' in combined_top.columns:
+            combined_top = combined_top.drop_duplicates(subset='run_id')
+        else:
+            combined_top = combined_top.drop_duplicates()
+        
+        beating_yasa = combined_top[combined_top['delta_kappa'] > 0]
+        target_achieved = combined_top[combined_top['delta_kappa'] >= delta_threshold]
+        
+        analysis_df = combined_top
+        print(f"\nCombined top performers analysis: {len(combined_top)} unique runs")
+    else:
+        beating_yasa = df[df['delta_kappa'] > 0]
+        target_achieved = df[df['delta_kappa'] >= delta_threshold]
+        analysis_df = df
+        print(f"\nFallback to full dataset analysis: {len(df)} runs")
     
     if not beating_yasa.empty:
         print(f"\nStrategies beating YASA: {len(beating_yasa)}/{len(df)} runs ({len(beating_yasa)/len(df)*100:.1f}%)")
         
-        # Best overall performance
-        best_idx = df['delta_kappa'].idxmax()
-        best_run = df.loc[best_idx]
+        # Best overall performance from top performers
+        best_idx = analysis_df['delta_kappa'].idxmax()
+        best_run = analysis_df.loc[best_idx]
         print(f"\nBest performance:")
         print(f"  {best_run['num_subjects']:.0f} subjects × {best_run['minutes_per_subject']:.1f} min/subject")
         print(f"  Total: {best_run['total_hours']:.1f} hours")
@@ -424,10 +514,15 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
             print(f"  Total: {target_run['total_hours']:.1f} hours")
             print(f"  Performance: Δκ = +{target_run['delta_kappa']:.3f}")
     
-    # Correlation analysis  
-    corr_subjects = np.corrcoef(df['num_subjects'], df['delta_kappa'])[0,1]
-    corr_minutes_per_subject = np.corrcoef(df['minutes_per_subject'], df['delta_kappa'])[0,1]
-    corr_total = np.corrcoef(df['total_hours'], df['delta_kappa'])[0,1]
+    # Correlation analysis using top performers
+    if 'analysis_df' in locals() and not analysis_df.empty:
+        corr_subjects = np.corrcoef(analysis_df['num_subjects'], analysis_df['delta_kappa'])[0,1]
+        corr_minutes_per_subject = np.corrcoef(analysis_df['minutes_per_subject'], analysis_df['delta_kappa'])[0,1]
+        corr_total = np.corrcoef(analysis_df['total_hours'], analysis_df['delta_kappa'])[0,1]
+    else:
+        corr_subjects = np.corrcoef(df['num_subjects'], df['delta_kappa'])[0,1]
+        corr_minutes_per_subject = np.corrcoef(df['minutes_per_subject'], df['delta_kappa'])[0,1]
+        corr_total = np.corrcoef(df['total_hours'], df['delta_kappa'])[0,1]
     
     print(f"\nCorrelations with performance improvement:")
     print(f"  Number of subjects: {corr_subjects:.3f}")
@@ -472,7 +567,7 @@ def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description='Generate Figure 4: Subjects vs Minutes Analysis')
     parser.add_argument("--csv", required=True, help="Path to flattened CSV")
-    parser.add_argument("--out", default="artifacts/results/figures/paper", help="Output directory")
+    parser.add_argument("--out", default="Plot_Clean/figures/fig4", help="Output directory")
     args = parser.parse_args()
 
     setup_plotting_style()

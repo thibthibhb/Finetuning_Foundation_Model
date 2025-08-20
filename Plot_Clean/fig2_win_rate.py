@@ -356,7 +356,7 @@ def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description='Generate Figure 2: Win Rate & Delta-kappa Distribution')
     parser.add_argument("--csv", required=True, help="Path to flattened CSV")
-    parser.add_argument("--out", default="artifacts/results/figures/paper", help="Output directory")
+    parser.add_argument("--out", default="Plot_Clean/figures/fig2", help="Output directory")
     args = parser.parse_args()
 
     setup_plotting_style()
