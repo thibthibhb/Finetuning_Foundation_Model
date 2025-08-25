@@ -195,11 +195,12 @@ class RunLoader:
         if history_df.empty:
             return {}
         
-        # Extract key metrics
+        # Extract key metrics including phase transition parameters
         key_metrics = [
             'val_kappa', 'val_accuracy', 'val_f1', 
             'train_loss', 'val_loss',
-            'epoch', '_step', '_runtime'
+            'epoch', '_step', '_runtime',
+            'training_phase', 'phase_transition_epoch', 'backbone_unfrozen'
         ]
         
         processed = {}
@@ -268,9 +269,14 @@ class RunLoader:
                 'focal_gamma': config.get('focal_gamma', 2.0),
                 'two_phase_training': config.get('two_phase_training', False),
                 'phase1_epochs': config.get('phase1_epochs', 3),
+                'unfreeze_epoch': config.get('phase1_epochs', 3) if config.get('two_phase_training', False) else 0,
                 'head_lr': config.get('head_lr', 1e-3),
                 'backbone_lr': config.get('backbone_lr', 1e-5),
                 'use_amp': config.get('use_amp', False),
+                # Phase transition parameters from W&B logs
+                'actual_phase_transition_epoch': self._extract_phase_transition_epoch(run_data.get('history', {})),
+                'has_phase_transition': self._has_phase_transition(run_data.get('history', {})),
+                'final_training_phase': self._extract_final_training_phase(run_data.get('history', {})),
             },
             
             # ICL Configuration (new)
@@ -380,6 +386,34 @@ class RunLoader:
             return np.nan
         except:
             return np.nan
+    
+    def _extract_phase_transition_epoch(self, history: Dict) -> Optional[int]:
+        """Extract the actual epoch when phase transition occurred from W&B logs."""
+        if 'phase_transition_epoch' in history:
+            transition_data = history['phase_transition_epoch']
+            if 'values' in transition_data and transition_data['values']:
+                # Return the first logged phase transition epoch
+                return int(transition_data['values'][0])
+        return None
+    
+    def _has_phase_transition(self, history: Dict) -> bool:
+        """Check if run had a phase transition based on W&B logs."""
+        if 'training_phase' in history:
+            phase_data = history['training_phase']
+            if 'values' in phase_data and phase_data['values']:
+                # Check if we ever switched to phase 2
+                return 2 in phase_data['values']
+        return False
+    
+    def _extract_final_training_phase(self, history: Dict) -> int:
+        """Extract the final training phase from W&B logs."""
+        if 'training_phase' in history:
+            phase_data = history['training_phase']
+            if 'final' in phase_data:
+                return int(phase_data['final'])
+            elif 'values' in phase_data and phase_data['values']:
+                return int(phase_data['values'][-1])
+        return 1  # Default to phase 1 if no phase transition logged
     
     def _validate_contract_compliance(self, contract_data: Dict) -> Dict:
         """Validate that run meets contract requirements."""
@@ -816,7 +850,8 @@ def create_contract_spec() -> ContractSpec:
             'backbone', 'use_pretrained_weights', 'head_type'
         ],
         required_training_fields=[
-            'epochs', 'batch_size', 'lr', 'optimizer', 'scheduler'
+            'epochs', 'batch_size', 'lr', 'optimizer', 'scheduler', 
+            'two_phase_training', 'phase1_epochs', 'unfreeze_epoch'
         ],
         required_result_fields=[
             'num_classes', 'test_kappa', 'test_f1'

@@ -230,6 +230,44 @@ def load_and_prepare(csv_path: Path, x_mode: str, num_subjects: Optional[int] = 
     df = df[(df["num_classes"] == 5) & df["test_kappa"].notna() & df["xvalue"].notna()]
     print(f"After filtering (5-class, valid kappa, valid x): {len(df)} rows")
     
+    # Remove outliers: if single dataset (num_datasets=1) but subject_count >11, discard
+    num_datasets_col = None
+    for col in ["contract.dataset.num_datasets", "cfg.num_datasets", "num_datasets"]:
+        if col in df.columns:
+            num_datasets_col = col
+            break
+    
+    # Remove data corruption: ORP alone cannot have >11 subjects
+    if 'dataset_composition' in df.columns and 'num_subjects' in df.columns:
+        corrupt_entries = df[(df['dataset_composition'] == 'ORP') & (df['num_subjects'] > 11)]
+        if len(corrupt_entries) > 0:
+            print(f"🚨 Removing {len(corrupt_entries)} CORRUPT entries (ORP dataset with >11 subjects):")
+            for _, row in corrupt_entries.iterrows():
+                print(f"  {row['name']}: {row['num_subjects']} subjects, dataset={row['dataset_composition']} - IMPOSSIBLE!")
+            df = df[~((df['dataset_composition'] == 'ORP') & (df['num_subjects'] > 11))]
+            print(f"After removing corrupt ORP entries: {len(df)} rows")
+    
+    # Remove entries with spaces in dataset composition (formatting issue)
+    if 'dataset_composition' in df.columns:
+        space_entries = df[df['dataset_composition'].str.contains(', ', na=False)]
+        if len(space_entries) > 0:
+            print(f"🚨 Removing {len(space_entries)} entries with spaces in dataset composition:")
+            for _, row in space_entries.iterrows():
+                print(f"  {row['name']}: dataset='{row['dataset_composition']}' - HAS SPACES!")
+            df = df[~df['dataset_composition'].str.contains(', ', na=False)]
+            print(f"After removing spaced dataset entries: {len(df)} rows")
+    
+    if num_datasets_col and 'num_subjects' in df.columns:
+        outliers = df[(df[num_datasets_col] == 1) & (df['num_subjects'] > 11)]
+        if len(outliers) > 0:
+            print(f"Removing {len(outliers)} impossible outliers (single dataset with >11 subjects):")
+            for _, row in outliers.iterrows():
+                datasets = row.get('dataset_composition', 'unknown')
+                print(f"  {row['name']}: {row['num_subjects']} subjects, datasets={datasets}")
+            df = df[~((df[num_datasets_col] == 1) & (df['num_subjects'] > 11))]
+            print(f"After removing impossible outliers: {len(df)} rows")
+
+    
     # Check if we successfully created num_subjects column
     if 'num_subjects' not in df.columns:
         print(f"Warning: Could not find num_subjects column for filtering")
@@ -529,6 +567,15 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
         if len(subj_df) == 0:
             continue
 
+        # DEBUG: Print detailed info for suspicious high subject counts
+        if subj_count > 40:
+            print(f"\n🔍 DEBUGGING subject count {subj_count}:")
+            print(f"  Found {len(subj_df)} runs with {subj_count} subjects")
+            for _, row in subj_df.iterrows():
+                print(f"    Run: {row['name']}")
+                print(f"    Dataset: {row['dataset_composition']}")
+                print(f"    Kappa: {row['test_kappa']:.3f}")
+
         for dataset_comp in subj_df['dataset_composition'].unique():
             dataset_subj_df = subj_df[subj_df['dataset_composition'] == dataset_comp]
             if len(dataset_subj_df) == 0:
@@ -539,6 +586,10 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
             ci_low, ci_high = bootstrap_ci_median(kappa_values)
             delta_median = median_kappa - yasa_kappa
             ci_delta_low = ci_low - yasa_kappa if not np.isnan(ci_low) else np.nan
+
+            # DEBUG: Print what color is assigned to high subject counts
+            if subj_count > 40:
+                print(f"  📊 Plotting: {subj_count} subjects, {dataset_comp}, color: {dataset_colors[dataset_comp]}")
 
             subject_count_data.append({
                 'num_subjects': int(subj_count),

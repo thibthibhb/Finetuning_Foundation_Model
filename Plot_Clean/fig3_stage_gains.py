@@ -37,8 +37,8 @@ OKABE_ITO = {
 }
 
 CB_COLORS = {
-    "yasa": OKABE_ITO["vermillion"],   # reddish
-    "cbramod": OKABE_ITO["blue"],      # strong blue
+    "yasa": OKABE_ITO["orange"],      # warm orange for YASA
+    "cbramod": OKABE_ITO["blue"],      # teal/blue for CBraMod
     "improvement_pos": OKABE_ITO["green"],
     "improvement_neg": OKABE_ITO["vermillion"],
 }
@@ -54,8 +54,8 @@ def setup_plotting_style():
         "font.size": 12,
         "axes.titlesize": 16,
         "axes.labelsize": 14,
-        "xtick.labelsize": 12,
-        "ytick.labelsize": 12,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
         "legend.fontsize": 12,
         "figure.dpi": 120,
         "savefig.dpi": 300,
@@ -64,6 +64,7 @@ def setup_plotting_style():
         "axes.spines.right": False,
         "axes.grid": True,
         "grid.alpha": 0.3,
+        "axes.axisbelow": True,
     })
 
 def bootstrap_ci_mean(arr: np.ndarray, confidence: float = 0.95) -> tuple:
@@ -279,13 +280,13 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
     bars_yasa = ax.bar(
         x_pos - width/2, yasa_baselines, width,
         color=CB_COLORS["yasa"], alpha=0.85, label="YASA Baseline",
-        edgecolor="black", linewidth=1
+        edgecolor="black", linewidth=1.8
     )
 
     bars_cbramod = ax.bar(
         x_pos + width/2, cbramod_means, width,
         color=CB_COLORS["cbramod"], alpha=0.85, label="CBraMod (T*)",
-        edgecolor="black", linewidth=1, hatch="//"   # hatch pattern for redundancy
+        edgecolor="black", linewidth=1.8, hatch="//"   # hatch pattern for redundancy
     )
 
     
@@ -304,7 +305,7 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
         
         ax.errorbar(x_pos + width/2, cbramod_means, 
                    yerr=[errors_low, errors_high],
-                   fmt='none', color='black', capsize=4, capthick=2, alpha=0.8)
+                   fmt='none', color='black', capsize=3, capthick=1.8, alpha=0.8)
     
     # Add improvement annotations
     for i, (stage, delta) in enumerate(zip(stages, deltas)):
@@ -338,7 +339,7 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
     
     ax.set_xticks(x_pos)
     ax.set_xticklabels(stage_labels)
-    ax.legend(loc='upper left', frameon=True, fancybox=True, shadow=True)
+    ax.legend(loc='upper left', frameon=True, fancybox=True, shadow=True, bbox_to_anchor=(0.0, 1.0))
     ax.grid(True, axis='y', alpha=0.3)
     ax.set_axisbelow(True)
     
@@ -346,10 +347,14 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, t_star: int, output_dir: Pa
     y_max = max(max(yasa_baselines), max(cbramod_means)) + 0.25
     ax.set_ylim(0, min(1.0, y_max))
     
-    # Add horizontal line at 0.5 (good performance threshold)
-    ax.axhline(y=0.5, color=OKABE_ITO["black"], linestyle='--', alpha=0.6, linewidth=1)
-    ax.text(len(stages)-0.5, 0.52, 'Good Performance (F1=0.5)', 
-           ha='right', va='bottom', fontsize=10, alpha=0.7)
+    # Add horizontal line at 0.5 (good performance threshold) as ribbon
+    ax.fill_between(x_pos, [0.48]*len(stages), [0.52]*len(stages), 
+                    color=OKABE_ITO["black"], alpha=0.2, zorder=0)
+    ax.axhline(y=0.5, color=OKABE_ITO["black"], linestyle='--', alpha=0.6, linewidth=1.8)
+    
+    # Add note about statistical methodology
+    ax.text(0.02, 0.02, 'Error bars = subject-level bootstrap 95% CI. * p<0.05, ** p<0.01, *** p<0.001', 
+            transform=ax.transAxes, fontsize=9, alpha=0.7, verticalalignment='bottom')
     
     plt.tight_layout()
     

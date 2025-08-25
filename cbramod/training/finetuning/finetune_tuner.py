@@ -89,7 +89,19 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     params.scheduler = trial.suggest_categorical("scheduler", ["cosine"])
     params.head_type = trial.suggest_categorical("head_type", ["simple", "deep", "attention"]) #, "deep", "attention"
     params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [False, True]) #True,
-    params.datasets = trial.suggest_categorical("datasets", ["ORP", "ORP, 2023_Open_N", "ORP, 2019_Open_N", "ORP, 2017_Open_N", "ORP, 2023_Open_N, 2019_Open_N, 2017_Open_N"]) #, "IDUN_CBraMod"
+    params.datasets = trial.suggest_categorical("datasets", [
+        #"ORP",
+        "ORP,2023_Open_N", 
+        "ORP,2019_Open_N", 
+        "ORP,2017_Open_N", 
+        "ORP,2023_Open_N,2019_Open_N,2017_Open_N"
+    ])
+    print(f"🐛 DEBUG: Optuna selected datasets: {repr(params.datasets)}")
+    
+    # Process datasets after Optuna selection (this should happen here, not in main)
+    params.dataset_names = [name.strip() for name in params.datasets.split(',')]
+    params.num_datasets = len(params.dataset_names)
+    print(f"🐛 DEBUG: Updated dataset_names: {params.dataset_names} (count: {params.num_datasets})")
     if params.use_focal_loss:
         params.focal_gamma = trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5)
     else:
@@ -113,6 +125,38 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
         ]
     )
 
+    # TEST TO DELETE:
+    params.num_of_classes = trial.suggest_categorical("num_of_classes", [4, 5])
+    params.label_mapping_version = trial.suggest_categorical("label_mapping_version", ["v0", "v1"])
+    params.embedding_dim = trial.suggest_categorical("embedding_dim", [256, 512, 768])
+    params.layers = trial.suggest_int("layers", 8, 16)
+    params.heads = trial.suggest_categorical("heads", [4, 8, 12, 16])
+
+    params.use_amp = trial.suggest_categorical("use_amp", [True, False])
+    params.epochs = trial.suggest_int("epochs", 50, 200)
+    params.use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
+    params.sample_rate = trial.suggest_categorical("sample_rate", [100, 200, 250])
+    params.icl_mode = trial.suggest_categorical("icl_mode", ["cnp", "set"]) #"none", "proto", 
+    if params.icl_mode != "none":
+        params.k_support = trial.suggest_int("k_support", 1, 20)
+        params.proto_temp = trial.suggest_float("proto_temp", 0.01, 1.0, log=True)
+        params.icl_hidden = trial.suggest_categorical("icl_hidden", [128, 256, 512])
+        params.icl_layers = trial.suggest_int("icl_layers", 1, 4)
+
+    params.use_metric_friendly_training = trial.suggest_categorical("use_metric_friendly_training", [True, False])
+    if params.use_metric_friendly_training:
+        params.contrastive_weight = trial.suggest_float("contrastive_weight", 0.01, 0.5)
+        params.prototypical_weight = trial.suggest_float("prototypical_weight", 0.01, 0.5)
+
+    params.use_temporal_smoothing = trial.suggest_categorical("use_temporal_smoothing", [True, False])
+    if params.use_temporal_smoothing:
+        params.temporal_smoothing_window = trial.suggest_int("temporal_smoothing_window", 3, 7)
+
+    params.preprocess = trial.suggest_categorical("preprocess", [True, False])
+    params.data_fraction = trial.suggest_float("data_fraction", 0.3, 1.0)
+
+    params.frozen = trial.suggest_categorical("frozen", [True, False])
+    
     load_dataset = idun_datasets.LoadDataset(params)
     seqs_labels_path_pair = load_dataset.get_all_pairs()
     dataset = idun_datasets.MemoryEfficientKFoldDataset(

@@ -437,33 +437,59 @@ class Trainer(object):
         self.contrastive_weight = getattr(params, 'contrastive_weight', 0.1)
         self.prototypical_weight = getattr(params, 'prototypical_weight', 0.1)
         self.use_temporal_smoothing = getattr(params, 'use_temporal_smoothing', False)
+        
+        # CLAUDE-ENHANCEMENT: Strengthened ICL training parameters
+        self.icl_loss_weight = getattr(params, 'icl_loss_weight', 0.15)  # Increased from 0.05
+        self.icl_contrastive_weight = getattr(params, 'icl_contrastive_weight', 0.1)  # New: contrastive loss for ICL features
         self.temporal_smoothing_window = getattr(params, 'temporal_smoothing_window', 3)
 
-    # CLAUDE-ENHANCEMENT: Global prototypes computation for Proto ICL enhancement
     @torch.no_grad()
     def _compute_global_protos(self):
-        """Compute global prototypes from training data for shrinkage regularization."""
+        """Compute global prototypes from training data using a safe (num_workers=0) loader."""
         C = self.params.num_of_classes
         dev = self.device
         feats_list, labs_list = [], []
-        
-        print("🔄 Computing global prototypes from training data...")
-        
-        for batch in self.data_loader['train']:
+
+        print("🔄 Computing global prototypes from training data (safe loader)...")
+
+        # Build a temporary, zero-worker loader over the same dataset
+        train_loader = self.data_loader['train']
+        ds = getattr(train_loader, 'dataset', None)
+        bs = getattr(train_loader, 'batch_size', 64)
+        collate_fn = getattr(train_loader, 'collate_fn', None)
+
+        if ds is None:
+            # Fallback: iterate the current loader (rare), but it may still fail if it has many workers
+            tmp_loader = train_loader
+        else:
+            from torch.utils.data import DataLoader
+            tmp_loader = DataLoader(
+                ds,
+                batch_size=bs,
+                shuffle=False,
+                num_workers=0,             # ✅ key change
+                pin_memory=False,          # minimize extra resources here
+                persistent_workers=False,  # ✅ ensure no long-lived workers
+                drop_last=False,
+                collate_fn=collate_fn,
+                prefetch_factor=None       # ignored when num_workers==0, but explicit for clarity
+            )
+
+        for batch in tmp_loader:
             if isinstance(batch, (list, tuple)) and len(batch) == 3:
                 x, y, _ = batch
             else:
                 x, y = batch
             x = x.to(dev)
-            
+
             with amp.autocast('cuda', enabled=self.use_amp):
                 f = self._extract_features(x).detach()
             feats_list.append(f.cpu())
             labs_list.append(y.cpu())
-            
+
         F = torch.cat(feats_list)
         L = torch.cat(labs_list)
-        
+
         protos = []
         for c in range(C):
             m = (L == c)
@@ -471,9 +497,9 @@ class Trainer(object):
                 protos.append(F[m].mean(0))
             else:
                 protos.append(torch.zeros(F.size(1)))
-        
-        self.global_protos = torch.stack(protos)  # Keep on CPU
+        self.global_protos = torch.stack(protos)  # keep on CPU
         print(f"✅ Computed global prototypes for {C} classes, shape: {self.global_protos.shape}")
+
 
     # CLAUDE-ENHANCEMENT: Compute real class weights from training data
     def _compute_class_weights(self, device):
@@ -964,10 +990,11 @@ class Trainer(object):
             query_indices = indices[k_shot:k_shot + q_query]
             
             support_x_list.append(class_samples[support_indices])
-            support_y_list.append(torch.full((k_shot,), cls, dtype=torch.long, device=self.device))
+            # CLAUDE-ENHANCEMENT: Use episode-local class IDs (0, 1, 2, ...) for better ICL learning
+            support_y_list.append(torch.full((k_shot,), class_idx, dtype=torch.long, device=self.device))
             
             query_x_list.append(class_samples[query_indices])
-            query_y_list.append(torch.full((q_query,), cls, dtype=torch.long, device=self.device))
+            query_y_list.append(torch.full((q_query,), class_idx, dtype=torch.long, device=self.device))
         
         # Concatenate all support and query samples
         support_x = torch.cat(support_x_list, dim=0)
@@ -979,7 +1006,7 @@ class Trainer(object):
 
     def _compute_icl_loss(self, support_x, support_y, query_x, query_y):
         """
-        Compute ICL loss using DeepSets or Set Transformer head.
+        Compute enhanced ICL loss with supervised contrastive learning for Set-ICL training.
         
         Args:
             support_x: [N_sup, ...] support samples
@@ -988,7 +1015,7 @@ class Trainer(object):
             query_y: [N_query] query labels
             
         Returns:
-            icl_loss: scalar loss value
+            icl_loss: scalar loss value (CE + supervised contrastive)
         """
         if self.icl_head is None:
             return torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -998,17 +1025,32 @@ class Trainer(object):
             support_features = self.model.forward_features(support_x)  # [N_sup, z_dim]
             query_features = self.model.forward_features(query_x)      # [N_query, z_dim]
             
-            # Light normalization - keep original scale but normalize direction
-            # support_features = F.normalize(support_features, p=2, dim=1)
-            # query_features = F.normalize(query_features, p=2, dim=1)
-            
             # ICL head forward pass
             icl_logits = self.icl_head(support_features, support_y, query_features)  # [N_query, num_classes]
             
-            # Compute cross-entropy loss
-            icl_loss = F.cross_entropy(icl_logits, query_y)
+            # Primary cross-entropy loss
+            icl_ce_loss = F.cross_entropy(icl_logits, query_y)
+            
+            # CLAUDE-ENHANCEMENT: Add supervised contrastive loss on ICL episode features
+            icl_contrastive_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+            
+            if self.icl_contrastive_weight > 0 and len(support_features) > 1:
+                # Combine support and query features for contrastive learning
+                all_features = torch.cat([support_features, query_features], dim=0)
+                all_labels = torch.cat([support_y, query_y], dim=0)
+                
+                # Apply L2 normalization for contrastive learning
+                all_features_normalized = F.normalize(all_features, dim=-1)
+                
+                # Compute supervised contrastive loss on ICL episode features
+                icl_contrastive_loss = self._compute_supervised_contrastive_loss(
+                    all_features_normalized, all_labels, temperature=0.07  # Lower temp for ICL
+                )
+            
+            # Combine losses
+            total_icl_loss = icl_ce_loss + self.icl_contrastive_weight * icl_contrastive_loss
         
-        return icl_loss
+        return total_icl_loss
 
     # CLAUDE-ENHANCEMENT: Metric-friendly training with contrastive and prototypical losses
     def _compute_supervised_contrastive_loss(self, features, labels, temperature=0.1):
@@ -1180,10 +1222,13 @@ class Trainer(object):
             logits = self.model.classifier(features)   # [N, C] classification logits
         
         # Standard cross-entropy loss
+        # Ensure labels are LongTensor for CrossEntropyLoss
+        y = y.to(device=logits.device, dtype=torch.long)
+        
         if self.params.downstream_dataset == 'ISRUC':
-            ce_loss = self.criterion(logits.transpose(1, 2), y)
+            ce_loss = self.criterion(logits.float().transpose(1, 2), y)
         else:
-            ce_loss = self.criterion(logits, y)
+            ce_loss = self.criterion(logits.float(), y)
         
         loss_components = {'ce_loss': ce_loss.item()}
         total_loss = ce_loss
@@ -1703,6 +1748,15 @@ class Trainer(object):
             print(f"🚀 Initializing two-phase training")
             self.model.set_progressive_unfreezing_mode(phase=1)
             self._update_optimizer_for_two_phase(phase=1)
+            
+            # Log phase 1 initialization to W&B
+            if hasattr(self, 'wandb_run') and self.wandb_run:
+                wandb.log({
+                    "training_phase": 1,
+                    "phase1_epochs": self.params.phase1_epochs,
+                    "backbone_frozen": True,
+                    "two_phase_training_enabled": True
+                }, step=0)
 
         for epoch in range(self.params.epochs):
             # Two-phase training logic - only switch at phase transition
@@ -1712,6 +1766,14 @@ class Trainer(object):
                     print(f"🔄 Switching to Phase 2 at epoch {epoch}")
                     self.model.set_progressive_unfreezing_mode(phase=2)
                     self._update_optimizer_for_two_phase(phase=2)
+                    
+                    # Log phase transition to W&B
+                    if hasattr(self, 'wandb_run') and self.wandb_run:
+                        wandb.log({
+                            "training_phase": 2,
+                            "phase_transition_epoch": epoch,
+                            "backbone_unfrozen": True
+                        }, step=epoch)
             
             total_train_start = timer()
             self.model.train()  # Set model to train mode
@@ -1748,19 +1810,25 @@ class Trainer(object):
                     # Standard classification loss
                     with amp.autocast('cuda', enabled=self.use_amp):
                         pred = self.model(x)
-                        if self.params.downstream_dataset == 'ISRUC':
-                            ce_loss = self.criterion(pred.transpose(1, 2), y)
-                        else:
-                            ce_loss = self.criterion(pred, y)
+                    
+                    # Ensure labels are LongTensor for CrossEntropyLoss  
+                    y = y.to(device=pred.device, dtype=torch.long)
+                    
+                    if self.params.downstream_dataset == 'ISRUC':
+                        ce_loss = self.criterion(pred.float().transpose(1, 2), y)
+                    else:
+                        ce_loss = self.criterion(pred.float(), y)
                     total_loss = total_loss + ce_loss
                     loss_components['ce_loss'] = ce_loss.item()
                     
-                    # Episodic ICL loss
+                    # CLAUDE-ENHANCEMENT: Strengthened episodic ICL training
+                    # Increase episode difficulty and balance
+                    unique_classes_in_batch = len(torch.unique(y))
                     episode_data = self._create_episodic_batch_cnp(
                         (x, y, sid) if sid is not None else (x, y),
-                        n_way=min(3, len(torch.unique(y))), 
-                        k_shot=2, 
-                        q_query=3
+                        n_way=min(4, unique_classes_in_batch),  # Increased from 3 to 4
+                        k_shot=3,                               # Increased from 2 to 3  
+                        q_query=5                               # Increased from 3 to 5
                     )
                     
                     if episode_data is not None:
@@ -1768,8 +1836,7 @@ class Trainer(object):
                         icl_loss = self._compute_icl_loss(support_x, support_y, query_x, query_y)
                         
                         # Weight ICL loss (conservative to avoid overpowering CE loss)
-                        icl_weight = 0.05
-                        total_loss = total_loss + icl_weight * icl_loss
+                        total_loss = total_loss + self.icl_loss_weight * icl_loss
                         loss_components['icl_loss'] = icl_loss.item()
                         
                     loss = total_loss
@@ -1798,10 +1865,14 @@ class Trainer(object):
                     # Standard forward pass
                     with amp.autocast('cuda', enabled=self.use_amp):
                         pred = self.model(x)
-                        if self.params.downstream_dataset == 'ISRUC':
-                            loss = self.criterion(pred.transpose(1, 2), y)
-                        else:
-                            loss = self.criterion(pred, y)
+                    
+                    # Ensure labels are LongTensor for CrossEntropyLoss  
+                    y = y.to(device=pred.device, dtype=torch.long)
+                    
+                    if self.params.downstream_dataset == 'ISRUC':
+                        loss = self.criterion(pred.float().transpose(1, 2), y)
+                    else:
+                        loss = self.criterion(pred.float(), y)
                         
                 # CLAUDE-COMMENTED-OUT: Old AMP usage
                 # # Forward pass with mixed precision
@@ -1869,10 +1940,14 @@ class Trainer(object):
                         # CLAUDE-ENHANCEMENT: Validation with unified AMP
                         with amp.autocast('cuda', enabled=self.use_amp):
                             pred_val = self.model(x_val)
-                            if self.params.downstream_dataset == 'ISRUC':
-                                val_loss = self.criterion(pred_val.transpose(1, 2), y_val)
-                            else:
-                                val_loss = self.criterion(pred_val, y_val)
+                        
+                        # Ensure labels are LongTensor for CrossEntropyLoss
+                        y_val = y_val.to(device=pred_val.device, dtype=torch.long)
+                        
+                        if self.params.downstream_dataset == 'ISRUC':
+                            val_loss = self.criterion(pred_val.float().transpose(1, 2), y_val)
+                        else:
+                            val_loss = self.criterion(pred_val.float(), y_val)
                             
                         # CLAUDE-COMMENTED-OUT: Old AMP validation
                         # if self.use_amp:

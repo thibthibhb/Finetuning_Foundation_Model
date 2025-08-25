@@ -1,5 +1,0 @@
-START RequestId: 07337f1f-6391-4a87-b21a-1757f8aa5caa Version: $LATEST
-[WARNING]	2025-08-20T11:17:10.128Z	07337f1f-6391-4a87-b21a-1757f8aa5caa	mkdir -p failed for path /home/sbx_user1051/.config/matplotlib: [Errno 30] Read-only file system: '/home/sbx_user1051'
-[WARNING]	2025-08-20T11:17:10.129Z	07337f1f-6391-4a87-b21a-1757f8aa5caa	Matplotlib created a temporary cache directory at /tmp/matplotlib-bv87e0db because there was an issue with the default path (/home/sbx_user1051/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
-END RequestId: 07337f1f-6391-4a87-b21a-1757f8aa5caa
-REPORT RequestId: 07337f1f-6391-4a87-b21a-1757f8aa5caa	Duration: 21300.02 ms	Billed Duration: 25298 ms	Memory Size: 2048 MB	Max Memory Used: 1441 MB	Init Duration: 3997.12 ms	

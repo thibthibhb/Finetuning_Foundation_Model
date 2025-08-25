@@ -109,11 +109,12 @@ def load_and_prepare_data(csv_path: Path) -> pd.DataFrame:
         if col in df.columns:
             df['subject'] = df[col]
             break
-    
+
     # Filter and clean
     df = df[(df["num_classes"] == 5) & df["test_kappa"].notna() & (df['num_subjects'] > 0)]
-    df = df.dropna(subset=['num_subjects', 'subject'])
-    
+    df = df.dropna(subset=['num_subjects']) #, 'subject'
+    print(df.groupby('num_subjects').size())
+
     print(f"After filtering: {len(df)} runs")
     print(f"Subject counts: {sorted(df['num_subjects'].unique())}")
     
@@ -133,6 +134,12 @@ def create_figure_2(df: pd.DataFrame, output_dir: Path):
     
     for subj_count in sorted(df['num_subjects'].unique()):
         subj_df = df[df['num_subjects'] == subj_count].copy()
+        
+        # Keep the median (or max) performance for each subject in this bin
+        subj_df = (
+            subj_df.groupby('subject', as_index=False)
+                   .agg(test_kappa=('test_kappa','median'))  # or 'max'
+        )
         
         # Filter out bottom 30% performers
         if len(subj_df) > 3:
@@ -206,49 +213,14 @@ def create_figure_2(df: pd.DataFrame, output_dir: Path):
     win_rate_df = pd.DataFrame(win_rate_data)
     violin_df = pd.DataFrame(violin_data)
     
-    # Create the figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), height_ratios=[1, 1.2])
-    
-    # Upper panel: Win rate
-    valid_ci = ~(np.isnan(win_rate_df['ci_low']) | np.isnan(win_rate_df['ci_high']))
-    
-    if valid_ci.any():
-        ax1.errorbar(
-            win_rate_df.loc[valid_ci, 'num_subjects'],
-            win_rate_df.loc[valid_ci, 'win_rate'],
-            yerr=[
-                win_rate_df.loc[valid_ci, 'win_rate'] - win_rate_df.loc[valid_ci, 'ci_low'],
-                win_rate_df.loc[valid_ci, 'ci_high'] - win_rate_df.loc[valid_ci, 'win_rate']
-            ],
-            fmt='o-', color='#2E86AB', linewidth=2.5, markersize=6,
-            capsize=4, capthick=2, label='Win Rate ± 95% CI'
-        )
-    
-    # Points without CI
-    missing_ci = ~valid_ci
-    if missing_ci.any():
-        ax1.plot(
-            win_rate_df.loc[missing_ci, 'num_subjects'],
-            win_rate_df.loc[missing_ci, 'win_rate'],
-            'o-', color='#2E86AB', linewidth=2.5, markersize=6
-        )
-    
-    # 50% line (random chance)
-    ax1.axhline(y=0.5, color='gray', linestyle=':', alpha=0.7, label='Random chance (50%)')
-    
-    ax1.set_ylabel('Win Rate\n(Fraction > YASA)', fontweight='bold')
-    ax1.set_title('Figure 2A: Win Rate vs Training Data Size', fontweight='bold', pad=15)
-    ax1.legend(loc='lower right')
-    ax1.grid(True, alpha=0.3)
-    ax1.set_ylim(0, 1)
+    # Create the figure with single subplot
+    fig, ax2 = plt.subplots(1, 1, figsize=(12, 6))
     
     # Set x-axis ticks every 5 subjects
     max_subjects = max(win_rate_df['num_subjects'])
     x_ticks = np.arange(0, max_subjects + 5, 5)
-    ax1.set_xticks(x_ticks)
-    ax1.set_xlim(0, max_subjects + 2)
     
-    # Lower panel: Violin plots of delta-kappa
+    # Violin plots of delta-kappa
     subject_counts = sorted(violin_df['num_subjects'].unique())
     
     # Create violin plot
@@ -299,7 +271,7 @@ def create_figure_2(df: pd.DataFrame, output_dir: Path):
     
     ax2.set_xlabel('Number of Training Subjects', fontweight='bold')
     ax2.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax2.set_title('Figure 2B: Per-Subject Performance Improvement Distribution', 
+    ax2.set_title('Figure 2: Per-Subject Performance Improvement Distribution', 
                   fontweight='bold', pad=15)
     ax2.legend(loc='upper right')
     ax2.grid(True, alpha=0.3)
@@ -317,7 +289,6 @@ def create_figure_2(df: pd.DataFrame, output_dir: Path):
     
     if t_star is not None:
         # Add vertical line at T*
-        ax1.axvline(x=t_star, color='red', linestyle=':', alpha=0.8, linewidth=2)
         ax2.axvline(x=t_star, color='red', linestyle=':', alpha=0.8, linewidth=2,
                     label=f'T* = {t_star} subjects (≥80% win rate)')
         

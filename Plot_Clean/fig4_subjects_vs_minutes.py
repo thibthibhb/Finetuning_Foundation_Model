@@ -19,9 +19,28 @@ import seaborn as sns
 from pathlib import Path
 from scipy.stats import bootstrap
 from scipy.interpolate import griddata
+from scipy import stats
 import argparse
 import warnings
 from matplotlib import cycler
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
+from sklearn.inspection import partial_dependence
+from sklearn.ensemble import RandomForestRegressor
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    print("SHAP not available. Install with: pip install shap")
+try:
+    import statsmodels.api as sm
+    from statsmodels.formula.api import mixedlm
+    STATSMODELS_AVAILABLE = True
+except ImportError:
+    STATSMODELS_AVAILABLE = False
+    print("Statsmodels not available. Install with: pip install statsmodels")
 
 warnings.filterwarnings("ignore")
 
@@ -37,6 +56,11 @@ OKABE_ITO = {
     "black": "#000000",
 }
 
+CB_COLORS = {
+    "cbramod": OKABE_ITO["blue"],      # teal/blue for CBraMod
+    "yasa": OKABE_ITO["orange"],       # warm orange for YASA
+}
+
 def setup_plotting_style():
     """Configure matplotlib for publication-ready plots."""
     plt.style.use("default")
@@ -47,8 +71,8 @@ def setup_plotting_style():
         "font.size": 12,
         "axes.titlesize": 16,
         "axes.labelsize": 14,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
         "legend.fontsize": 11,
         "figure.dpi": 120,
         "savefig.dpi": 300,
@@ -57,6 +81,7 @@ def setup_plotting_style():
         "axes.spines.right": False,
         "axes.grid": True,
         "grid.alpha": 0.3,
+        "axes.axisbelow": True,
         "axes.prop_cycle": cycler(color=list(OKABE_ITO.values())),
         # Key for overlap management:
         "figure.constrained_layout.use": True,
@@ -201,7 +226,542 @@ def create_subjects_minutes_heatmap(df: pd.DataFrame, yasa_kappa: float = 0.446)
     
     return heatmap_data
 
-def create_figure_4(df: pd.DataFrame, output_dir: Path):
+def iso_hours_analysis(df: pd.DataFrame, hour_bins: list = None) -> pd.DataFrame:
+    """Matched comparisons analysis - compare different allocations within equal total hours bins."""
+    
+    if hour_bins is None:
+        # Create bins based on data distribution
+        min_hours = df['total_hours'].min()
+        max_hours = df['total_hours'].max()
+        hour_bins = np.arange(np.floor(min_hours/100)*100, np.ceil(max_hours/100)*100 + 100, 100)
+    
+    print(f"\n=== ISO-HOURS ANALYSIS ===")
+    print(f"Analyzing {len(hour_bins)-1} hour bins: {hour_bins}")
+    
+    iso_results = []
+    
+    for i in range(len(hour_bins)-1):
+        bin_min = hour_bins[i]
+        bin_max = hour_bins[i+1]
+        
+        # Get data within this hour bin
+        bin_data = df[(df['total_hours'] >= bin_min) & (df['total_hours'] < bin_max)].copy()
+        
+        if len(bin_data) < 5:  # Need sufficient data for comparison
+            continue
+            
+        print(f"\nHour bin [{bin_min:.0f}-{bin_max:.0f}h]: {len(bin_data)} runs")
+        
+        # Within this iso-hour bin, compare different allocation strategies
+        bin_data['strategy'] = pd.cut(bin_data['num_subjects'], 
+                                     bins=[0, 5, 10, 20, float('inf')], 
+                                     labels=['1-5 subj', '6-10 subj', '11-20 subj', '20+ subj'])
+        
+        for strategy, group in bin_data.groupby('strategy', observed=True):
+            if len(group) >= 3:  # Need at least 3 runs for meaningful stats
+                median_delta = group['delta_kappa'].median()
+                mean_subjects = group['num_subjects'].mean()
+                mean_minutes_per_subj = group['minutes_per_subject'].mean()
+                
+                iso_results.append({
+                    'hour_bin': f'{bin_min:.0f}-{bin_max:.0f}h',
+                    'hour_bin_center': (bin_min + bin_max) / 2,
+                    'strategy': strategy,
+                    'n_runs': len(group),
+                    'median_delta_kappa': median_delta,
+                    'mean_subjects': mean_subjects,
+                    'mean_minutes_per_subject': mean_minutes_per_subj,
+                    'total_hours_mean': group['total_hours'].mean()
+                })
+                
+                print(f"  {strategy}: n={len(group)}, Δκ={median_delta:.3f}, "
+                      f"{mean_subjects:.1f} subj × {mean_minutes_per_subj:.0f} min/subj")
+    
+    iso_df = pd.DataFrame(iso_results)
+    
+    if not iso_df.empty:
+        print(f"\n=== ISO-HOURS SUMMARY ===")
+        best_per_bin = iso_df.groupby('hour_bin').apply(
+            lambda x: x.loc[x['median_delta_kappa'].idxmax()]
+        ).reset_index(drop=True)
+        
+        for _, row in best_per_bin.iterrows():
+            print(f"{row['hour_bin']}: Best = {row['strategy']} "
+                  f"(Δκ={row['median_delta_kappa']:.3f}, "
+                  f"{row['mean_subjects']:.1f} subj × {row['mean_minutes_per_subject']:.0f} min/subj)")
+    
+    return iso_df
+
+def mixed_effects_regression(df: pd.DataFrame) -> dict:
+    """Mixed-effects regression analysis to quantify relative importance."""
+    
+    print(f"\n=== MIXED-EFFECTS REGRESSION ===")
+    
+    if not STATSMODELS_AVAILABLE:
+        print("Statsmodels not available - using regular regression")
+        return regular_regression_analysis(df)
+    
+    # Prepare data
+    analysis_df = df.copy()
+    analysis_df = analysis_df.dropna(subset=['delta_kappa', 'num_subjects', 'minutes_per_subject', 'total_hours'])
+    
+    if len(analysis_df) < 10:
+        print(f"Insufficient data for regression: {len(analysis_df)} rows")
+        return {}
+    
+    # Add dataset as a grouping variable if available
+    if 'dataset_composition' in analysis_df.columns:
+        dataset_col = 'dataset_composition'
+    elif 'cfg.datasets' in analysis_df.columns:
+        dataset_col = 'cfg.datasets'
+    else:
+        # Create a dummy grouping variable
+        analysis_df['dataset_dummy'] = 'dataset_1'
+        dataset_col = 'dataset_dummy'
+    
+    # Add control variables if available
+    control_vars = []
+    
+    # Check for unfreeze epoch
+    unfreeze_cols = [col for col in analysis_df.columns if 'unfreeze' in col.lower()]
+    if unfreeze_cols:
+        unfreeze_col = unfreeze_cols[0]
+        if analysis_df[unfreeze_col].notna().sum() > len(analysis_df) * 0.5:
+            control_vars.append(unfreeze_col)
+    
+    # Check for label granularity
+    label_cols = [col for col in analysis_df.columns if 'label' in col.lower() and 'version' in col.lower()]
+    if label_cols:
+        label_col = label_cols[0]
+        if analysis_df[label_col].notna().sum() > len(analysis_df) * 0.5:
+            analysis_df[f'{label_col}_encoded'] = pd.Categorical(analysis_df[label_col]).codes
+            control_vars.append(f'{label_col}_encoded')
+    
+    try:
+        # Build formula
+        formula_parts = ['delta_kappa ~ num_subjects + minutes_per_subject + total_hours']
+        if control_vars:
+            formula_parts.append(' + '.join(control_vars))
+        
+        formula = ' + '.join(formula_parts)
+        
+        print(f"Formula: {formula}")
+        print(f"Random effects: (1|{dataset_col})")
+        
+        # Fit mixed-effects model
+        model = mixedlm(formula, analysis_df, groups=analysis_df[dataset_col])
+        result = model.fit(method='lbfgs')
+        
+        print(f"\nMixed-Effects Model Results:")
+        print(result.summary())
+        
+        # Extract standardized coefficients
+        scaler = StandardScaler()
+        X_cols = ['num_subjects', 'minutes_per_subject', 'total_hours'] + control_vars
+        X_available = [col for col in X_cols if col in analysis_df.columns]
+        
+        X_scaled = scaler.fit_transform(analysis_df[X_available])
+        y_scaled = scaler.fit_transform(analysis_df[['delta_kappa']])
+        
+        # Calculate partial R² for main variables
+        main_vars = ['num_subjects', 'minutes_per_subject', 'total_hours']
+        partial_r2 = {}
+        
+        for var in main_vars:
+            if var in analysis_df.columns:
+                # Full model R²
+                full_vars = [v for v in X_available]
+                if len(full_vars) > 1:
+                    X_full = analysis_df[full_vars]
+                    lr_full = LinearRegression().fit(X_full, analysis_df['delta_kappa'])
+                    r2_full = lr_full.score(X_full, analysis_df['delta_kappa'])
+                    
+                    # Reduced model R² (without this variable)
+                    reduced_vars = [v for v in full_vars if v != var]
+                    if reduced_vars:
+                        X_reduced = analysis_df[reduced_vars]
+                        lr_reduced = LinearRegression().fit(X_reduced, analysis_df['delta_kappa'])
+                        r2_reduced = lr_reduced.score(X_reduced, analysis_df['delta_kappa'])
+                        
+                        partial_r2[var] = r2_full - r2_reduced
+                    else:
+                        partial_r2[var] = r2_full
+        
+        print(f"\nPartial R² (unique contribution):")
+        for var, r2 in sorted(partial_r2.items(), key=lambda x: x[1], reverse=True):
+            print(f"  {var}: {r2:.4f}")
+        
+        return {
+            'model': result,
+            'partial_r2': partial_r2,
+            'formula': formula,
+            'n_obs': len(analysis_df)
+        }
+        
+    except Exception as e:
+        print(f"Mixed-effects model failed: {e}")
+        return regular_regression_analysis(df)
+
+def regular_regression_analysis(df: pd.DataFrame) -> dict:
+    """Fallback regular regression analysis."""
+    
+    analysis_df = df.copy()
+    analysis_df = analysis_df.dropna(subset=['delta_kappa', 'num_subjects', 'minutes_per_subject', 'total_hours'])
+    
+    if len(analysis_df) < 10:
+        print(f"Insufficient data for regression: {len(analysis_df)} rows")
+        return {}
+    
+    X_vars = ['num_subjects', 'minutes_per_subject', 'total_hours']
+    X = analysis_df[X_vars]
+    y = analysis_df['delta_kappa']
+    
+    # Standardized coefficients
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    lr = LinearRegression().fit(X_scaled, y)
+    
+    print(f"\nStandardized Coefficients (Regular Regression):")
+    for var, coef in zip(X_vars, lr.coef_):
+        print(f"  {var}: {coef:.4f}")
+    
+    print(f"R² = {lr.score(X_scaled, y):.4f}")
+    
+    return {
+        'coefficients': dict(zip(X_vars, lr.coef_)),
+        'r2': lr.score(X_scaled, y),
+        'n_obs': len(analysis_df)
+    }
+
+def partial_dependence_analysis(df: pd.DataFrame) -> dict:
+    """Partial dependence and SHAP analysis for nonlinearity detection."""
+    
+    print(f"\n=== PARTIAL DEPENDENCE ANALYSIS ===")
+    
+    analysis_df = df.copy()
+    analysis_df = analysis_df.dropna(subset=['delta_kappa', 'num_subjects', 'minutes_per_subject', 'total_hours'])
+    
+    if len(analysis_df) < 20:
+        print(f"Insufficient data for partial dependence: {len(analysis_df)} rows")
+        return {}
+    
+    X_vars = ['num_subjects', 'minutes_per_subject', 'total_hours']
+    X = analysis_df[X_vars]
+    y = analysis_df['delta_kappa']
+    
+    # Use Random Forest for nonlinear relationships
+    rf = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf.fit(X, y)
+    
+    print(f"Random Forest R² = {rf.score(X, y):.4f}")
+    print(f"Feature Importance:")
+    for var, importance in zip(X_vars, rf.feature_importances_):
+        print(f"  {var}: {importance:.4f}")
+    
+    # Partial dependence plots
+    results = {'model': rf, 'feature_importance': dict(zip(X_vars, rf.feature_importances_))}
+    
+    # SHAP analysis if available
+    if SHAP_AVAILABLE:
+        try:
+            explainer = shap.TreeExplainer(rf)
+            shap_values = explainer.shap_values(X)
+            
+            print(f"\nSHAP Analysis:")
+            shap_importance = np.abs(shap_values).mean(0)
+            for var, importance in zip(X_vars, shap_importance):
+                print(f"  {var} SHAP importance: {importance:.4f}")
+            
+            results['shap_values'] = shap_values
+            results['shap_importance'] = dict(zip(X_vars, shap_importance))
+            
+        except Exception as e:
+            print(f"SHAP analysis failed: {e}")
+    
+    # Check for diminishing returns in minutes_per_subject
+    if 'minutes_per_subject' in X.columns:
+        minutes_range = np.linspace(X['minutes_per_subject'].min(), 
+                                   X['minutes_per_subject'].max(), 50)
+        
+        # Fix other variables at median
+        X_pd = X.copy()
+        pd_results = []
+        
+        for minutes in minutes_range:
+            X_temp = X_pd.copy()
+            X_temp['minutes_per_subject'] = minutes
+            pred = rf.predict(X_temp).mean()
+            pd_results.append({'minutes_per_subject': minutes, 'predicted_delta': pred})
+        
+        pd_df = pd.DataFrame(pd_results)
+        
+        # Check for knee/saturation point
+        diffs = np.diff(pd_df['predicted_delta'])
+        if len(diffs) > 10:
+            # Find where rate of improvement drops significantly
+            knee_idx = np.where(diffs < np.percentile(diffs, 25))[0]
+            if len(knee_idx) > 0:
+                knee_minutes = pd_df.iloc[knee_idx[0]]['minutes_per_subject']
+                print(f"\nDiminishing returns knee detected at ~{knee_minutes:.0f} minutes per subject")
+                results['knee_point'] = knee_minutes
+        
+        results['partial_dependence'] = pd_df
+    
+    return results
+
+def sensitivity_analysis(df: pd.DataFrame) -> dict:
+    """Sensitivity analysis - repeat without top-3 selection to check robustness."""
+    
+    print(f"\n=== SENSITIVITY ANALYSIS ===")
+    print(f"Comparing results with and without top-3 per bin selection")
+    
+    # Original analysis with top-3 selection
+    print(f"\nWith top-3 selection:")
+    df_filtered = select_top_runs_per_bin(df.copy(), 'total_hours', 100, n_top=3)
+    print(f"  Data: {len(df_filtered)} runs (from {len(df)} total)")
+    
+    if len(df_filtered) >= 10:
+        reg_filtered = regular_regression_analysis(df_filtered)
+        corr_filtered = {
+            'subjects': np.corrcoef(df_filtered['num_subjects'], df_filtered['delta_kappa'])[0,1],
+            'minutes_per_subject': np.corrcoef(df_filtered['minutes_per_subject'], df_filtered['delta_kappa'])[0,1],
+            'total_hours': np.corrcoef(df_filtered['total_hours'], df_filtered['delta_kappa'])[0,1]
+        }
+        print(f"  Correlations - subjects: {corr_filtered['subjects']:.3f}, "
+              f"minutes/subj: {corr_filtered['minutes_per_subject']:.3f}, "
+              f"total: {corr_filtered['total_hours']:.3f}")
+    
+    # Full dataset analysis
+    print(f"\nWithout filtering (full dataset):")
+    print(f"  Data: {len(df)} runs")
+    
+    if len(df) >= 10:
+        reg_full = regular_regression_analysis(df)
+        corr_full = {
+            'subjects': np.corrcoef(df['num_subjects'], df['delta_kappa'])[0,1],
+            'minutes_per_subject': np.corrcoef(df['minutes_per_subject'], df['delta_kappa'])[0,1],
+            'total_hours': np.corrcoef(df['total_hours'], df['delta_kappa'])[0,1]
+        }
+        print(f"  Correlations - subjects: {corr_full['subjects']:.3f}, "
+              f"minutes/subj: {corr_full['minutes_per_subject']:.3f}, "
+              f"total: {corr_full['total_hours']:.3f}")
+    
+    # Random sampling analysis
+    print(f"\nRandom sampling (same size as filtered):")
+    n_sample = min(len(df_filtered) if 'df_filtered' in locals() else 100, len(df))
+    np.random.seed(42)
+    df_random = df.sample(n=n_sample, random_state=42)
+    print(f"  Data: {len(df_random)} runs")
+    
+    if len(df_random) >= 10:
+        reg_random = regular_regression_analysis(df_random)
+        corr_random = {
+            'subjects': np.corrcoef(df_random['num_subjects'], df_random['delta_kappa'])[0,1],
+            'minutes_per_subject': np.corrcoef(df_random['minutes_per_subject'], df_random['delta_kappa'])[0,1],
+            'total_hours': np.corrcoef(df_random['total_hours'], df_random['delta_kappa'])[0,1]
+        }
+        print(f"  Correlations - subjects: {corr_random['subjects']:.3f}, "
+              f"minutes/subj: {corr_random['minutes_per_subject']:.3f}, "
+              f"total: {corr_random['total_hours']:.3f}")
+    
+    # Summary of robustness
+    print(f"\n=== SENSITIVITY SUMMARY ===")
+    
+    # Compare which factor is most important across methods
+    methods = ['filtered', 'full', 'random']
+    results_by_method = {}
+    
+    for method in methods:
+        corr_dict = locals().get(f'corr_{method}')
+        if corr_dict:
+            abs_corrs = {k: abs(v) for k, v in corr_dict.items()}
+            strongest = max(abs_corrs, key=abs_corrs.get)
+            results_by_method[method] = {
+                'strongest_predictor': strongest,
+                'correlations': corr_dict
+            }
+    
+    if results_by_method:
+        print(f"Strongest predictor by method:")
+        for method, result in results_by_method.items():
+            print(f"  {method}: {result['strongest_predictor']} "
+                  f"(r={result['correlations'][result['strongest_predictor']]:.3f})")
+        
+        # Check consistency
+        strongest_predictors = [r['strongest_predictor'] for r in results_by_method.values()]
+        if len(set(strongest_predictors)) == 1:
+            print(f"\n✅ ROBUST: {strongest_predictors[0]} consistently most important")
+        else:
+            print(f"\n⚠️ INCONSISTENT: Results vary by selection method")
+    
+    return results_by_method
+
+def comprehensive_testing_suite(df: pd.DataFrame, output_dir: Path) -> dict:
+    """Run all testing methods and create comprehensive output."""
+    
+    print(f"\n{'='*60}")
+    print(f"COMPREHENSIVE TESTING SUITE")
+    print(f"{'='*60}")
+    print(f"Dataset: {len(df)} runs")
+    
+    results = {}
+    
+    # 1. Iso-hours analysis
+    try:
+        results['iso_hours'] = iso_hours_analysis(df)
+    except Exception as e:
+        print(f"Iso-hours analysis failed: {e}")
+        results['iso_hours'] = pd.DataFrame()
+    
+    # 2. Mixed-effects regression
+    try:
+        results['mixed_effects'] = mixed_effects_regression(df)
+    except Exception as e:
+        print(f"Mixed-effects regression failed: {e}")
+        results['mixed_effects'] = {}
+    
+    # 3. Partial dependence analysis
+    try:
+        results['partial_dependence'] = partial_dependence_analysis(df)
+    except Exception as e:
+        print(f"Partial dependence analysis failed: {e}")
+        results['partial_dependence'] = {}
+    
+    # 4. Sensitivity analysis
+    try:
+        results['sensitivity'] = sensitivity_analysis(df)
+    except Exception as e:
+        print(f"Sensitivity analysis failed: {e}")
+        results['sensitivity'] = {}
+    
+    # 5. Create comprehensive summary
+    create_testing_summary(results, output_dir)
+    
+    return results
+
+def create_testing_summary(results: dict, output_dir: Path):
+    """Create comprehensive testing summary and visualizations."""
+    
+    print(f"\n{'='*60}")
+    print(f"COMPREHENSIVE TESTING SUMMARY")
+    print(f"{'='*60}")
+    
+    # Summary text
+    summary_lines = []
+    summary_lines.append("# CBraMod Subjects vs Minutes: Comprehensive Testing Results\n")
+    
+    # Iso-hours analysis
+    if 'iso_hours' in results and not results['iso_hours'].empty:
+        iso_df = results['iso_hours']
+        summary_lines.append("## Iso-Hours Analysis (Matched Comparisons)\n")
+        summary_lines.append("Comparing different allocation strategies within equal total hour bins:\n")
+        
+        for hour_bin in iso_df['hour_bin'].unique():
+            bin_data = iso_df[iso_df['hour_bin'] == hour_bin]
+            best_strategy = bin_data.loc[bin_data['median_delta_kappa'].idxmax()]
+            summary_lines.append(f"- **{hour_bin}**: Best = {best_strategy['strategy']} "
+                                f"(Δκ={best_strategy['median_delta_kappa']:.3f})\n")
+        summary_lines.append("\n")
+    
+    # Mixed-effects regression
+    if 'mixed_effects' in results and results['mixed_effects']:
+        me_results = results['mixed_effects']
+        summary_lines.append("## Mixed-Effects Regression Analysis\n")
+        
+        if 'partial_r2' in me_results:
+            summary_lines.append("Partial R² (unique contribution of each factor):\n")
+            for var, r2 in sorted(me_results['partial_r2'].items(), key=lambda x: x[1], reverse=True):
+                summary_lines.append(f"- **{var}**: {r2:.4f}\n")
+        
+        if 'coefficients' in me_results:
+            summary_lines.append("\nStandardized coefficients:\n")
+            for var, coef in me_results['coefficients'].items():
+                summary_lines.append(f"- **{var}**: {coef:.4f}\n")
+        summary_lines.append("\n")
+    
+    # Partial dependence analysis
+    if 'partial_dependence' in results and results['partial_dependence']:
+        pd_results = results['partial_dependence']
+        summary_lines.append("## Partial Dependence Analysis\n")
+        
+        if 'feature_importance' in pd_results:
+            summary_lines.append("Random Forest feature importance:\n")
+            for var, importance in sorted(pd_results['feature_importance'].items(), key=lambda x: x[1], reverse=True):
+                summary_lines.append(f"- **{var}**: {importance:.4f}\n")
+        
+        if 'knee_point' in pd_results:
+            summary_lines.append(f"\n**Diminishing returns detected** at ~{pd_results['knee_point']:.0f} minutes per subject\n")
+        
+        if 'shap_importance' in pd_results:
+            summary_lines.append("\nSHAP importance (average impact):\n")
+            for var, importance in sorted(pd_results['shap_importance'].items(), key=lambda x: x[1], reverse=True):
+                summary_lines.append(f"- **{var}**: {importance:.4f}\n")
+        summary_lines.append("\n")
+    
+    # Sensitivity analysis
+    if 'sensitivity' in results and results['sensitivity']:
+        sens_results = results['sensitivity']
+        summary_lines.append("## Sensitivity Analysis\n")
+        summary_lines.append("Robustness check across different data selection methods:\n")
+        
+        for method, result in sens_results.items():
+            if 'strongest_predictor' in result:
+                strongest = result['strongest_predictor']
+                corr_val = result['correlations'][strongest]
+                summary_lines.append(f"- **{method}**: {strongest} (r={corr_val:.3f})\n")
+        summary_lines.append("\n")
+    
+    # Overall conclusion
+    summary_lines.append("## Overall Conclusion\n")
+    
+    # Determine consensus
+    importance_rankings = []
+    
+    if 'mixed_effects' in results and 'partial_r2' in results['mixed_effects']:
+        ranking = list(sorted(results['mixed_effects']['partial_r2'].items(), key=lambda x: x[1], reverse=True))
+        importance_rankings.append(('mixed_effects', ranking))
+    
+    if 'partial_dependence' in results and 'feature_importance' in results['partial_dependence']:
+        ranking = list(sorted(results['partial_dependence']['feature_importance'].items(), key=lambda x: x[1], reverse=True))
+        importance_rankings.append(('random_forest', ranking))
+    
+    if 'sensitivity' in results:
+        for method, result in results['sensitivity'].items():
+            if 'correlations' in result:
+                abs_corrs = {k: abs(v) for k, v in result['correlations'].items()}
+                ranking = list(sorted(abs_corrs.items(), key=lambda x: x[1], reverse=True))
+                importance_rankings.append((f'correlation_{method}', ranking))
+    
+    if importance_rankings:
+        # Find most consistent top factor
+        top_factors = [ranking[0][0] for method, ranking in importance_rankings if ranking]
+        if top_factors:
+            from collections import Counter
+            factor_counts = Counter(top_factors)
+            most_common = factor_counts.most_common(1)[0]
+            
+            if most_common[1] > len(importance_rankings) / 2:  # Majority agreement
+                summary_lines.append(f"**Consensus**: {most_common[0]} is consistently the most important factor "
+                                    f"across {most_common[1]}/{len(importance_rankings)} analysis methods.\n\n")
+            else:
+                summary_lines.append(f"**Mixed evidence**: No clear consensus on most important factor. "
+                                    f"Top factors: {dict(factor_counts)}\n\n")
+    
+    # Save summary
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_file = output_dir / 'comprehensive_testing_results.md'
+    
+    with open(summary_file, 'w') as f:
+        f.writelines(summary_lines)
+    
+    print(f"\n📊 Comprehensive testing summary saved to: {summary_file}")
+    print(f"\n🔍 Key findings:")
+    for line in summary_lines[-10:]:  # Show last few lines of summary
+        if line.startswith('**'):
+            print(f"   {line.strip()}")
+
+def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests: bool = True):
     """Create Figure 4: Subjects vs Minutes per Subject analysis."""
     
     yasa_kappa = 0.446
@@ -216,9 +776,9 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
     # Calculate delta kappa
     df['delta_kappa'] = df['test_kappa'] - yasa_kappa
     
-    # Create figure with subplots
-    fig = plt.figure(figsize=(16, 12), constrained_layout=True)
-    gs = fig.add_gridspec(3, 2, height_ratios=[1.2, 1, 1])
+    # Create figure with subplots (add space for common legend)
+    fig = plt.figure(figsize=(16, 13), constrained_layout=True)
+    gs = fig.add_gridspec(4, 2, height_ratios=[1.2, 1, 1, 0.15])
 
     fig.suptitle(
         'Figure 4: Subjects vs Minutes per Subject - What Matters More?\n'
@@ -303,91 +863,134 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
             except:
                 print("Could not add contour lines to heatmap")
     
-    # Panel B: Scatter plot - Performance vs Total Data Hours (binned, top 10 per 100h bin)
+    # Panel B: Scatter plot - Performance vs Total Data Hours (top performer + top 3 per 100h bin)
     ax1 = fig.add_subplot(gs[1, 0])
     
-    # Select top 10 runs per 100-hour bin
-    df_total_hours = select_top_runs_per_bin(df.copy(), 'total_hours', 100, n_top=10)
-    print(f"Panel B: {len(df_total_hours)} top runs selected from total hours bins")
+    # Find overall top performer
+    top_performer = df.loc[df['delta_kappa'].idxmax()].copy()
+    
+    # Select top 3 runs per 100-hour bin
+    df_total_hours = select_top_runs_per_bin(df.copy(), 'total_hours', 100, n_top=3)
+    print(f"Panel B: {len(df_total_hours)} top 3 runs selected from total hours bins")
     
     if not df_total_hours.empty:
         # slight jitter function to reduce vertical stacking
         rng = np.random.default_rng(42)
         jitter = (rng.standard_normal(len(df_total_hours)) * 0.005)
 
+        # Plot top 3 per bin as regular points - use consistent CBraMod color
         scatter = ax1.scatter(
             df_total_hours['total_hours'],
             df_total_hours['delta_kappa'] + jitter,
-            c=df_total_hours['num_subjects'],
-            s=50, alpha=0.75,  # Larger, more visible points
-            cmap='viridis',
-            edgecolors='black', linewidth=0.6
+            c=CB_COLORS['cbramod'],
+            s=40, alpha=0.7,  # Smaller points for bin tops
+            edgecolors='black', linewidth=0.5,
+            label='Top 3 per 100h bin'
         )
 
-        cbar1 = plt.colorbar(scatter, ax=ax1, pad=0.01, shrink=0.9)
-        cbar1.set_label('Number of Subjects', fontweight='bold')
+        # No colorbar needed since we use consistent color
+        
+        # Highlight overall top performer with special marker
+        ax1.scatter(
+            top_performer['total_hours'],
+            top_performer['delta_kappa'],
+            c='red', s=120, alpha=0.9,
+            marker='*', edgecolors='darkred', linewidth=2,
+            label=f'Top performer (Δκ={top_performer["delta_kappa"]:.3f})'
+        )
 
-    ax1.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2, label='YASA baseline')
-    ax1.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2, label=f'Target (+{delta_threshold})')
+    # YASA baseline as simple horizontal line
+    ax1.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+               label='YASA baseline (Δκ=0)', zorder=2)
+    ax1.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
 
     ax1.set_xlabel('Total Hours of Data', fontweight='bold')
     ax1.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax1.set_title('B: Performance vs Total Data\n(Top 10 per 100h bin)', fontweight='bold')
-    ax1.legend(handlelength=1.8, borderpad=0.4)
+    ax1.set_title('B: Performance vs Total Data\n(Top Performer + Top 3 per 100h bin)', fontweight='bold')
+    # Remove individual legend for Panel B
+    # ax1.legend(handlelength=1.8, borderpad=0.4, bbox_to_anchor=(1.05, 1), loc='upper left')
     ax1.grid(True, alpha=0.3)
     ax1.margins(x=0.03, y=0.1)
 
     
-    # Panel C: Minutes per subject vs Performance (binned, top 10 per 100min bin)
+    # Panel C: Minutes per subject vs Performance (top performer + top 3 per 100min bin)
     ax2 = fig.add_subplot(gs[1, 1])
     
-    # Select top 10 runs per 100-minute bin
-    df_minutes = select_top_runs_per_bin(df.copy(), 'minutes_per_subject', 100, n_top=10)
-    print(f"Panel C: {len(df_minutes)} top runs selected from minutes per subject bins")
+    # Select top 3 runs per 100-minute bin
+    df_minutes = select_top_runs_per_bin(df.copy(), 'minutes_per_subject', 100, n_top=3)
+    print(f"Panel C: {len(df_minutes)} top 3 runs selected from minutes per subject bins")
     
     if not df_minutes.empty:
         jitter = (rng.standard_normal(len(df_minutes)) * 0.005)
         ax2.scatter(
             df_minutes['minutes_per_subject'],
             df_minutes['delta_kappa'] + jitter,
-            c=OKABE_ITO['blue'],
-            s=50, alpha=0.75,  # Larger, more visible points
-            edgecolors='black', linewidth=0.6
+            c=CB_COLORS['cbramod'],
+            s=40, alpha=0.7,  # Smaller points for bin tops
+            edgecolors='black', linewidth=0.5,
+            label='Top 3 per 100min bin'
+        )
+        
+        # Highlight overall top performer
+        ax2.scatter(
+            top_performer['minutes_per_subject'],
+            top_performer['delta_kappa'],
+            c='red', s=120, alpha=0.9,
+            marker='*', edgecolors='darkred', linewidth=2,
+            label=f'Top performer (Δκ={top_performer["delta_kappa"]:.3f})'
         )
 
-    ax2.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
-    ax2.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
+    # YASA baseline as simple horizontal line
+    ax2.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+               label='YASA baseline (Δκ=0)', zorder=2)
+    ax2.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
 
     ax2.set_xlabel('Minutes per Subject', fontweight='bold')
     ax2.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax2.set_title('C: Performance vs Minutes per Subject\n(Top 10 per 100min bin)', fontweight='bold')
+    ax2.set_title('C: Performance vs Minutes per Subject\n(Top Performer + Top 3 per 100min bin)', fontweight='bold')
+    # Remove individual legend for Panel C
+    # ax2.legend(handlelength=1.8, borderpad=0.4, bbox_to_anchor=(1.05, 1), loc='upper left')
     ax2.grid(True, alpha=0.3)
     ax2.margins(x=0.03, y=0.1)
 
     
-    # Panel D: Number of subjects vs Performance (binned, top 10 per 3-subject bin)
+    # Panel D: Number of subjects vs Performance (top performer + top 3 per 3-subject bin)
     ax3 = fig.add_subplot(gs[2, 0])
     
-    # Select top 10 runs per 3-subject bin
-    df_subjects = select_top_runs_per_bin(df.copy(), 'num_subjects', 3, n_top=10)
-    print(f"Panel D: {len(df_subjects)} top runs selected from subject count bins")
+    # Select top 3 runs per 3-subject bin
+    df_subjects = select_top_runs_per_bin(df.copy(), 'num_subjects', 3, n_top=3)
+    print(f"Panel D: {len(df_subjects)} top 3 runs selected from subject count bins")
     
     if not df_subjects.empty:
         jitter = (rng.standard_normal(len(df_subjects)) * 0.005)
         ax3.scatter(
             df_subjects['num_subjects'],
             df_subjects['delta_kappa'] + jitter,
-            c=OKABE_ITO['orange'],
-            s=50, alpha=0.75,  # Larger, more visible points
-            edgecolors='black', linewidth=0.6
+            c=CB_COLORS['cbramod'],
+            s=40, alpha=0.7,  # Smaller points for bin tops
+            edgecolors='black', linewidth=0.5,
+            label='Top 3 per 3-subject bin'
+        )
+        
+        # Highlight overall top performer
+        ax3.scatter(
+            top_performer['num_subjects'],
+            top_performer['delta_kappa'],
+            c='red', s=120, alpha=0.9,
+            marker='*', edgecolors='darkred', linewidth=2,
+            label=f'Top performer (Δκ={top_performer["delta_kappa"]:.3f})'
         )
 
-    ax3.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
-    ax3.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
+    # YASA baseline as simple horizontal line
+    ax3.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+               label='YASA baseline (Δκ=0)', zorder=2)
+    ax3.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
 
     ax3.set_xlabel('Number of Subjects', fontweight='bold')
     ax3.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax3.set_title('D: Performance vs Number of Subjects\n(Top 10 per 3-subject bin)', fontweight='bold')
+    ax3.set_title('D: Performance vs Number of Subjects\n(Top Performer + Top 3 per 3-subject bin)', fontweight='bold')
+    # Remove individual legend for Panel D
+    # ax3.legend(handlelength=1.8, borderpad=0.4, bbox_to_anchor=(1.05, 1), loc='upper left')
     ax3.grid(True, alpha=0.3)
     ax3.margins(x=0.03, y=0.1)
 
@@ -421,15 +1024,16 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
             if box_data_filtered:
                 bp = ax4.boxplot(box_data_filtered, labels=labels_filtered, patch_artist=True)
 
-                palette = [OKABE_ITO['blue'], OKABE_ITO['orange'], OKABE_ITO['green'],
-                        OKABE_ITO['purple'], OKABE_ITO['sky'], OKABE_ITO['yellow']]
-                for i, patch in enumerate(bp['boxes']):
-                    patch.set_facecolor(palette[i % len(palette)])
+                # Use consistent CBraMod color for all boxes
+                for patch in bp['boxes']:
+                    patch.set_facecolor(CB_COLORS['cbramod'])
                     patch.set_alpha(0.7)
                     patch.set_edgecolor('black')
 
-                ax4.axhline(y=0, color=OKABE_ITO['vermillion'], linestyle='--', linewidth=2)
-                ax4.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=2)
+                # YASA baseline as simple horizontal line
+                ax4.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+                           label='YASA baseline (Δκ=0)', zorder=2)
+                ax4.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8)
 
                 ax4.set_xlabel('Number of Subjects', fontweight='bold')
                 ax4.set_ylabel('Δκ vs YASA', fontweight='bold')
@@ -442,6 +1046,33 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
                 # Rotate labels if needed
                 if len(labels_filtered) > 6:
                     ax4.tick_params(axis='x', rotation=45)
+    
+    # Create common legend at the bottom
+    legend_ax = fig.add_subplot(gs[3, :])
+    legend_ax.axis('off')  # Hide axes for legend area
+    
+    # Collect legend elements from all panels
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    
+    legend_elements = [
+        Line2D([0], [0], marker='*', color='red', linestyle='None', markersize=12, 
+               markeredgecolor='darkred', markeredgewidth=2, label=f'Top performer (Δκ={top_performer["delta_kappa"]:.3f})'),
+        Line2D([0], [0], marker='o', color='gray', linestyle='None', markersize=8, 
+               markeredgecolor='black', markeredgewidth=0.5, label='Top 3 per bin'),
+        Line2D([0], [0], color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, label='YASA baseline (Δκ=0)'),
+        Line2D([0], [0], color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target improvement (+{delta_threshold})'),
+    ]
+
+    
+    legend_ax.legend(handles=legend_elements, loc='center', ncol=2, 
+                    frameon=True, fancybox=True, shadow=True,
+                    fontsize=11, handlelength=2, columnspacing=2)
+    
+    # Add statistical methodology note
+    legend_ax.text(0.5, 0.2, 'Error bars = subject-level bootstrap 95% CI. All plots show top performers per bin to reduce noise.', 
+                  ha='center', va='center', transform=legend_ax.transAxes, 
+                  fontsize=9, alpha=0.7, style='italic')
     
     #plt.tight_layout()
     
@@ -560,6 +1191,10 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path):
         if not beating_yasa.empty:
             print(f"   However, {len(beating_yasa)} runs do beat YASA baseline")
     
+    # Run comprehensive testing suite
+    if run_comprehensive_tests:
+        test_results = comprehensive_testing_suite(df, output_dir)
+    
     plt.show()
     return fig
 
@@ -568,6 +1203,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate Figure 4: Subjects vs Minutes Analysis')
     parser.add_argument("--csv", required=True, help="Path to flattened CSV")
     parser.add_argument("--out", default="Plot_Clean/figures/fig4", help="Output directory")
+    parser.add_argument("--test", action="store_true", help="Run comprehensive testing suite")
     args = parser.parse_args()
 
     setup_plotting_style()
@@ -579,8 +1215,8 @@ def main():
         print("No valid data found")
         return
     
-    # Create figure
-    create_figure_4(df, Path(args.out))
+    # Create figure with optional comprehensive testing
+    create_figure_4(df, Path(args.out), run_comprehensive_tests=args.test)
 
 if __name__ == "__main__":
     main()

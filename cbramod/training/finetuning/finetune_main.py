@@ -24,26 +24,6 @@ try:
 except ImportError:
     from finetune_tuner import run_optuna_tuning
 
-# for ReadMe:
-  # Train with NEW 4-class mapping (recommended)
-#   python cbramod/training/finetuning/finetune_main.py \
-#       --num_of_classes 4 \
-#       --label_mapping_version v1 \
-#       --epochs 50 \
-#       --run_name "4c-v1-test"
-
-#   # Train with LEGACY 4-class mapping (for comparison)
-#   python cbramod/training/finetuning/finetune_main.py \
-#       --num_of_classes 4 \
-#       --label_mapping_version v0 \
-#       --epochs 50 \
-#       --run_name "4c-v0-legacy"
-
-#   # Train with 5-class (always v1)
-#   python cbramod/training/finetuning/finetune_main.py \
-#       --num_of_classes 5 \
-#       --epochs 50 \
-#       --run_name "5c-standard"
       
 def main(return_params=False):
     parser = argparse.ArgumentParser(description='Big model downstream')
@@ -154,6 +134,12 @@ def main(return_params=False):
                         help='Hidden dimension for ICL heads (DeepSets/Set Transformer)')
     parser.add_argument('--icl_layers', type=int, default=2,
                         help='Number of layers for Set Transformer ICL head')
+    
+    # CLAUDE-ENHANCEMENT: Strengthened Set-ICL training parameters
+    parser.add_argument('--icl_loss_weight', type=float, default=0.15,
+                        help='Loss weight for ICL training (increased from 0.05 for stronger Set-ICL)')
+    parser.add_argument('--icl_contrastive_weight', type=float, default=0.1,
+                        help='Weight for supervised contrastive loss on ICL episode features')
 
     params = parser.parse_args()
     
@@ -174,9 +160,12 @@ def main(return_params=False):
     print(f"\n🏷️  Label Mapping: {params.label_space_description}")
     print(f"📋 W&B Tags: {params.label_space_tags}")
     
-    # Automatically compute number of datasets
-    params.dataset_names = [name.strip() for name in params.datasets.split(',')]
-    params.num_datasets = len(params.dataset_names)
+    # Automatically compute number of datasets (skip if tuning - handled in objective function)
+    if not params.tune:
+        print(f"🐛 DEBUG: Raw datasets param: {repr(params.datasets)}")
+        params.dataset_names = [name.strip() for name in params.datasets.split(',')]
+        params.num_datasets = len(params.dataset_names)
+        print(f"🐛 DEBUG: Split dataset_names: {params.dataset_names} (count: {params.num_datasets})")
 
     # ✅ Load class weights if provided
     if params.weight_class is not None and os.path.exists(params.weight_class + ".npy"):
