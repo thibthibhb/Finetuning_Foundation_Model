@@ -25,14 +25,23 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    add_yasa_baseline, add_significance_marker,
+    bootstrap_ci_median, wilcoxon_test,
+    format_n_caption, add_sample_size_annotation
+)
+
 warnings.filterwarnings("ignore")
 
-# Color scheme (consistent across all panels)
+# Color scheme (consistent across all panels) - updated to use figure_style
 COLORS = {
-    'baseline': '#bbbbbb',
-    'Proto-ICL': '#2E8B57',
-    'Set-ICL (SetTransformer)': '#6A5ACD',
-    'Set-ICL (DeepSets)': '#D2691E'
+    'baseline': get_color('subjects'),
+    'None (Baseline)': get_color('subjects'),
+    'Proto-ICL': get_color('cbramod'),
+    'Set-ICL (SetTransformer)': get_color('4_class'),
+    'Set-ICL (DeepSets)': get_color('5_class')
 }
 
 # Method prefix mapping
@@ -42,41 +51,9 @@ METHOD_MAPPING = {
     'cnp_test': 'Set-ICL (DeepSets)'
 }
 
-def setup_plotting_style():
-    """Configure matplotlib and seaborn for publication-ready plots."""
-    sns.set_context("talk")
-    sns.set_style("whitegrid")
-    plt.rcParams.update({
-        'font.family': 'sans-serif',
-        'font.sans-serif': ['Arial', 'DejaVu Sans'],
-        'font.size': 11,
-        'axes.titlesize': 12,
-        'axes.labelsize': 11,
-        'xtick.labelsize': 10,
-        'ytick.labelsize': 10,
-        'legend.fontsize': 10,
-        'figure.dpi': 300,
-        'savefig.dpi': 300,
-        'savefig.bbox': 'tight',
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-    })
+# Removed - using setup_figure_style() from figure_style.py instead
 
-def bootstrap_ci_median(data: np.ndarray, n_bootstrap: int = 1000, confidence: float = 0.95, random_state: int = 123) -> Tuple[float, float]:
-    """Calculate bootstrap confidence interval for median."""
-    if len(data) < 2:
-        return np.nan, np.nan
-    
-    np.random.seed(random_state)
-    boot_medians = []
-    for _ in range(n_bootstrap):
-        sample = np.random.choice(data, size=len(data), replace=True)
-        boot_medians.append(np.median(sample))
-    
-    alpha = 1 - confidence
-    lower = np.percentile(boot_medians, 100 * alpha / 2)
-    upper = np.percentile(boot_medians, 100 * (1 - alpha / 2))
-    return lower, upper
+# Removed - using bootstrap_ci_median from figure_style.py instead
 
 def extract_k_from_key(key: str) -> Optional[int]:
     """Extract K value from summary key (e.g., 'proto_test_kappa_base_K3' -> 3)."""
@@ -299,50 +276,78 @@ def transform_standard_csv_to_icl_format(df: pd.DataFrame) -> pd.DataFrame:
     """Transform all_runs_flat.csv format to ICL analysis format."""
     print("🔄 Transforming standard CSV format to ICL format...")
     
-    # Filter for ICL runs (non-none modes)
+    # Include ALL runs (both ICL and none modes for comparison)
+    all_df = df.copy()
+    
+    # Separate none and non-none modes
+    none_df = df[df['contract.icl.icl_mode'] == 'none'].copy()
     icl_df = df[df['contract.icl.icl_mode'] != 'none'].copy()
     
-    if len(icl_df) == 0:
-        raise ValueError("No ICL runs found in the dataset (all runs have icl_mode='none')")
+    print(f"Found {len(none_df)} 'none' ICL runs and {len(icl_df)} actual ICL runs")
     
-    # Map columns to ICL format
-    icl_df['run_name'] = icl_df['name']
-    icl_df['method'] = icl_df['contract.icl.icl_mode'].map({
-        'proto': 'Proto-ICL',
-        'set': 'Set-ICL (SetTransformer)', 
-        'cnp': 'Set-ICL (DeepSets)'
-    })
-    icl_df['K'] = icl_df['contract.icl.k_support']
+    combined_data = []
     
-    # Use test metrics as both base and ICL (since we don't have separate measurements)
-    # Note: This is a simplified analysis - ideally we'd have separate baseline vs ICL measurements
-    icl_df['kappa_base'] = icl_df['contract.results.test_kappa']
-    icl_df['kappa_icl'] = icl_df['contract.results.test_kappa']  # Same as base - no delta available
-    icl_df['accbal_base'] = icl_df['contract.results.test_accuracy'] 
-    icl_df['accbal_icl'] = icl_df['contract.results.test_accuracy']
-    icl_df['f1w_base'] = icl_df['contract.results.test_f1']
-    icl_df['f1w_icl'] = icl_df['contract.results.test_f1']
+    # Process 'none' ICL runs (baseline)
+    if len(none_df) > 0:
+        for _, row in none_df.iterrows():
+            combined_data.append({
+                'run_name': row['name'],
+                'method': 'None (Baseline)',
+                'K': 0,  # Set K=0 for none ICL mode
+                'kappa_base': row['contract.results.test_kappa'],
+                'kappa_icl': row['contract.results.test_kappa'],
+                'delta_kappa': 0.0,  # No delta for baseline
+                'accbal_base': row['contract.results.test_accuracy'],
+                'accbal_icl': row['contract.results.test_accuracy'],
+                'delta_accbal': 0.0,
+                'f1w_base': row['contract.results.test_f1'],
+                'f1w_icl': row['contract.results.test_f1'],
+                'delta_f1w': 0.0,
+                'test_kappa_baseline': row['contract.results.test_kappa'],
+                'hours_of_data': row['contract.results.hours_of_data'],
+                'num_subjects_train': row['contract.dataset.num_subjects_train']
+            })
     
-    # Set deltas to zero since we don't have separate measurements
-    icl_df['delta_kappa'] = 0.0  # No delta available in this format
-    icl_df['delta_accbal'] = 0.0
-    icl_df['delta_f1w'] = 0.0
+    # Process actual ICL runs
+    if len(icl_df) > 0:
+        for _, row in icl_df.iterrows():
+            method_map = {
+                'proto': 'Proto-ICL',
+                'set': 'Set-ICL (SetTransformer)', 
+                'cnp': 'Set-ICL (DeepSets)'
+            }
+            
+            method = method_map.get(row['contract.icl.icl_mode'], 'Unknown')
+            
+            combined_data.append({
+                'run_name': row['name'],
+                'method': method,
+                'K': row['contract.icl.k_support'],
+                'kappa_base': row['contract.results.test_kappa'],
+                'kappa_icl': row['contract.results.test_kappa'],  # Same as base - no delta available
+                'delta_kappa': 0.0,  # No delta available in this format
+                'accbal_base': row['contract.results.test_accuracy'],
+                'accbal_icl': row['contract.results.test_accuracy'],
+                'delta_accbal': 0.0,
+                'f1w_base': row['contract.results.test_f1'],
+                'f1w_icl': row['contract.results.test_f1'],
+                'delta_f1w': 0.0,
+                'test_kappa_baseline': row['contract.results.test_kappa'],
+                'hours_of_data': row['contract.results.hours_of_data'],
+                'num_subjects_train': row['contract.dataset.num_subjects_train']
+            })
     
-    # Add other useful columns
-    icl_df['test_kappa_baseline'] = icl_df['contract.results.test_kappa']
-    icl_df['hours_of_data'] = icl_df['contract.results.hours_of_data']
-    icl_df['num_subjects_train'] = icl_df['contract.dataset.num_subjects_train']
+    if not combined_data:
+        raise ValueError("No valid ICL or baseline runs found in the dataset")
     
-    # Clean up and select relevant columns
-    icl_cols = [
-        'run_name', 'method', 'K', 'kappa_base', 'kappa_icl', 'delta_kappa',
-        'accbal_base', 'accbal_icl', 'delta_accbal', 'f1w_base', 'f1w_icl', 'delta_f1w',
-        'test_kappa_baseline', 'hours_of_data', 'num_subjects_train'
-    ]
+    result_df = pd.DataFrame(combined_data)
+    result_df = result_df.dropna(subset=['method'])
     
-    result_df = icl_df[icl_cols].dropna(subset=['method', 'K'])
+    print(f"✅ Transformed {len(result_df)} total runs:")
+    for method in result_df['method'].unique():
+        count = len(result_df[result_df['method'] == method])
+        print(f"   - {method}: {count} runs")
     
-    print(f"✅ Transformed {len(result_df)} ICL runs")
     print("⚠️  Note: Delta metrics are set to 0 since all_runs_flat.csv doesn't contain separate baseline vs ICL measurements")
     print("   For proper ICL analysis, you need a CSV with separate baseline and ICL performance measurements")
     
@@ -368,24 +373,42 @@ def find_best_k_per_method(df: pd.DataFrame, use_performance_instead_of_delta: b
     return best_k
 
 def create_icl_overview_figure(df: pd.DataFrame, output_path: Path):
-    """Create the main 2x3 ICL overview figure with proper paired delta analysis."""
+    """Create the main 2x3 ICL overview figure with performance comparison."""
     
-    # Enforce paired delta analysis - no fallback to direct performance
+    # Check if we have meaningful deltas or need to use direct performance comparison
     has_meaningful_deltas = df['delta_kappa'].abs().sum() > 1e-6  # Allow for floating point precision
     
     if not has_meaningful_deltas:
-        print("❌ Error: No meaningful delta metrics found!")
-        print("   This analysis requires ICL runs with separate baseline and ICL measurements.")
-        print("   Expected keys: proto_test_kappa_base_K{K}, proto_test_kappa_icl_K{K}, etc.")
-        raise ValueError("ICL delta analysis requires proper baseline vs ICL measurement pairs")
+        print("⚠️  No meaningful delta metrics found - switching to direct performance comparison mode")
+        print("   This will compare absolute performance rather than delta improvements")
+        use_performance_mode = True
+    else:
+        print("✅ Found meaningful delta metrics - using paired delta analysis")
+        use_performance_mode = False
     
-    # Find best K per method based on highest median delta_kappa
+    # Find best K per method based on highest median performance (since no deltas available)
     best_k_per_method = {}
+    metric_for_best_k = 'kappa_icl' if use_performance_mode else 'delta_kappa'
+    
     for method in df['method'].unique():
-        best_k_per_method[method] = find_best_k_for_method(df, method)
+        method_data = df[df['method'] == method]
+        if len(method_data) == 0:
+            continue
+        
+        # For 'None (Baseline)', just use K=0
+        if method == 'None (Baseline)':
+            best_k_per_method[method] = 0
+        else:
+            # Find K with highest median performance/delta
+            k_medians = method_data.groupby('K')[metric_for_best_k].median()
+            if len(k_medians) > 0:
+                max_median = k_medians.max()
+                best_ks = k_medians[k_medians == max_median].index.tolist()
+                best_k_per_method[method] = max(best_ks)
     
     # Print comprehensive summary statistics
-    print(f"\n📊 ICL Paired Delta Analysis")
+    analysis_type = "ICL Performance Comparison" if use_performance_mode else "ICL Paired Delta Analysis"
+    print(f"\n📊 {analysis_type}")
     print(f"{'='*60}")
     
     for method in df['method'].unique():
@@ -394,46 +417,75 @@ def create_icl_overview_figure(df: pd.DataFrame, output_path: Path):
         method_data = df[(df['method'] == method) & (df['K'] == best_k)]
         
         if len(method_data) > 0:
-            # Delta kappa statistics
-            delta_median = method_data['delta_kappa'].median()
-            ci_low, ci_high = bootstrap_ci_median(method_data['delta_kappa'].values)
             n_runs = len(method_data)
             
-            # Gain rate (% of runs with positive delta)
-            gain_rate = (method_data['delta_kappa'] > 0).mean() * 100
-            
-            print(f"\n{method}:")
-            print(f"  Available Ks: {available_ks}")
-            print(f"  Best K: {best_k} (n={n_runs} runs)")
-            print(f"  Median Δκ: {delta_median:.4f} [95% CI: {ci_low:.4f}, {ci_high:.4f}]")
-            print(f"  Gain rate: {gain_rate:.1f}% of runs show positive Δκ")
+            if use_performance_mode:
+                # Performance statistics
+                perf_median = method_data['kappa_icl'].median()
+                ci_low, ci_high = bootstrap_ci_median(method_data['kappa_icl'].values)
+                
+                print(f"\n{method}:")
+                print(f"  Available Ks: {available_ks}")
+                print(f"  Best K: {best_k} (n={n_runs} runs)")
+                print(f"  Median κ: {perf_median:.4f} [95% CI: {ci_low:.4f}, {ci_high:.4f}]")
+            else:
+                # Delta kappa statistics
+                delta_median = method_data['delta_kappa'].median()
+                ci_low, ci_high = bootstrap_ci_median(method_data['delta_kappa'].values)
+                gain_rate = (method_data['delta_kappa'] > 0).mean() * 100
+                
+                print(f"\n{method}:")
+                print(f"  Available Ks: {available_ks}")
+                print(f"  Best K: {best_k} (n={n_runs} runs)")
+                print(f"  Median Δκ: {delta_median:.4f} [95% CI: {ci_low:.4f}, {ci_high:.4f}]")
+                print(f"  Gain rate: {gain_rate:.1f}% of runs show positive Δκ")
         else:
             print(f"\n{method}: Available Ks: {available_ks}, Best K: {best_k} (no data)")
     
-    # Setup figure with proper delta analysis
+    # Setup figure 
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('ICL Paired Delta Analysis: Δ = ICL − Baseline', fontsize=16, fontweight='bold')
+    title_suffix = "Performance Comparison" if use_performance_mode else "Paired Delta Analysis: Δ = ICL − Baseline"
+    fig.suptitle(f'ICL {title_suffix}', fontsize=16, fontweight='bold')
     
     # Flatten axes for easier indexing
     axes = axes.flatten()
     
-    # Panel A: Δκ vs K (median ± 95% CI)
-    plot_paired_deltas_vs_k(df, axes[0], 'delta_kappa', 'Δκ (ICL − Baseline)', 'A) Δκ vs K-shot')
-    
-    # Panel B: Δ Balanced Accuracy vs K  
-    plot_paired_deltas_vs_k(df, axes[1], 'delta_accbal', 'Δ Balanced Accuracy', 'B) Δ Balanced Accuracy vs K-shot')
-    
-    # Panel C: Δ weighted F1 vs K
-    plot_paired_deltas_vs_k(df, axes[2], 'delta_f1w', 'Δ weighted F1', 'C) Δ weighted F1 vs K-shot')
-    
-    # Panel D: Δκ distribution at best-K (violin + box + swarm)
-    plot_delta_distributions_at_best_k(df, axes[3], best_k_per_method)
-    
-    # Panel E: Baseline κ vs Δκ correlation (properly enforced)
-    plot_baseline_vs_delta_correlation(df, axes[4], best_k_per_method)
-    
-    # Panel F: Per-class ΔF1 analysis (Proto rescue analysis)
-    plot_per_class_delta_f1(df, axes[5], best_k_per_method)
+    if use_performance_mode:
+        # Panel A: κ vs K (median ± 95% CI)
+        plot_performance_vs_k(df, axes[0], 'kappa_icl', 'Test κ', 'A) Performance vs K-shot')
+        
+        # Panel B: Balanced Accuracy vs K  
+        plot_performance_vs_k(df, axes[1], 'accbal_icl', 'Balanced Accuracy', 'B) Balanced Accuracy vs K-shot')
+        
+        # Panel C: weighted F1 vs K
+        plot_performance_vs_k(df, axes[2], 'f1w_icl', 'Weighted F1', 'C) Weighted F1 vs K-shot')
+        
+        # Panel D: κ distribution at best-K
+        plot_best_k_performance_distributions(df, axes[3], best_k_per_method, use_performance=True)
+        
+        # Panel E: Baseline κ vs ICL κ correlation
+        plot_baseline_correlation(df, axes[4], best_k_per_method, use_performance=True)
+        
+        # Panel F: Performance vs data scale
+        plot_data_scale_effects(df, axes[5], best_k_per_method, use_performance=True)
+    else:
+        # Panel A: Δκ vs K (median ± 95% CI)
+        plot_paired_deltas_vs_k(df, axes[0], 'delta_kappa', 'Δκ (ICL − Baseline)', 'A) Δκ vs K-shot')
+        
+        # Panel B: Δ Balanced Accuracy vs K  
+        plot_paired_deltas_vs_k(df, axes[1], 'delta_accbal', 'Δ Balanced Accuracy', 'B) Δ Balanced Accuracy vs K-shot')
+        
+        # Panel C: Δ weighted F1 vs K
+        plot_paired_deltas_vs_k(df, axes[2], 'delta_f1w', 'Δ weighted F1', 'C) Δ weighted F1 vs K-shot')
+        
+        # Panel D: Δκ distribution at best-K (violin + box + swarm)
+        plot_delta_distributions_at_best_k(df, axes[3], best_k_per_method)
+        
+        # Panel E: Baseline κ vs Δκ correlation (properly enforced)
+        plot_baseline_vs_delta_correlation(df, axes[4], best_k_per_method)
+        
+        # Panel F: Per-class ΔF1 analysis (Proto rescue analysis)
+        plot_per_class_delta_f1(df, axes[5], best_k_per_method)
     
     # Create shared legend
     handles = [plt.Line2D([0], [0], color=COLORS[method], linewidth=2, label=method) 
@@ -446,18 +498,13 @@ def create_icl_overview_figure(df: pd.DataFrame, output_path: Path):
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.08)
     
-    # Save figure
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Save figure using consistent save function
+    saved_files = save_figure(fig, output_path)
     
-    png_path = output_path.with_suffix('.png')
-    pdf_path = output_path.with_suffix('.pdf')
-    
-    plt.savefig(png_path, dpi=300, bbox_inches='tight')
-    plt.savefig(pdf_path, bbox_inches='tight')
-    
-    print(f"\n💾 Saved figures:")
-    print(f"  📊 {png_path}")
-    print(f"  📊 {pdf_path}")
+    # Print N information for caption
+    n_subjects = df['num_subjects_train'].nunique() if 'num_subjects_train' in df.columns else len(df['run_name'].unique())
+    n_runs = len(df)
+    print(f"\n📋 Caption info: {format_n_caption(n_subjects, n_runs, 'runs')}")
     
     plt.show()
 
@@ -1120,7 +1167,7 @@ def main():
     args = parser.parse_args()
     
     # Setup plotting
-    setup_plotting_style()
+    setup_figure_style()
     
     # Parse K filter
     ks_filter = None

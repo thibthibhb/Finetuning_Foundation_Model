@@ -5,6 +5,7 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from collections import defaultdict
 from sklearn.model_selection import GroupKFold
 from cbramod.utils.util import to_tensor
+from cbramod.utils.noise_injection import create_noise_injector
 
 import numpy as np
 from scipy.signal import iirnotch, filtfilt, savgol_filter
@@ -47,10 +48,24 @@ def preprocess_epoch(epoch, sfreq):
             
     
 class MemoryEfficientKFoldDataset(Dataset):
-    def __init__(self, seqs_labels_path_pair, num_of_classes=5, do_preprocess: bool = False, sfreq: float = 200.0, label_mapping_version='v1'):
+    def __init__(self, seqs_labels_path_pair, num_of_classes=5, do_preprocess: bool = False, sfreq: float = 200.0, label_mapping_version='v1', 
+                 noise_level: float = 0.0, noise_type: str = 'realistic', noise_seed: int = 42):
         # ✨ store the flags on the object
         self.do_preprocess = do_preprocess
         self.sfreq = sfreq        
+        
+        # Noise injection parameters
+        self.noise_level = noise_level
+        self.noise_type = noise_type
+        self.noise_seed = noise_seed
+        
+        # Initialize noise injector if noise is enabled
+        if self.noise_level > 0.0:
+            self.noise_injector = create_noise_injector(sample_rate=sfreq, seed=noise_seed)
+            print(f"🔊 Noise injection enabled: {noise_type} noise at {noise_level*100:.1f}% level (seed={noise_seed})")
+        else:
+            self.noise_injector = None
+            print("🔇 No noise injection (clean signals)")
         
         self.samples = []
         self.metadata = []
@@ -193,6 +208,11 @@ class MemoryEfficientKFoldDataset(Dataset):
     def __getitem__(self, idx):
         epoch, label = self.samples[idx]
         sid = self.metadata[idx]['subject']   # <- already tracked in self.metadata
+        
+        # Apply noise injection if enabled
+        if self.noise_injector is not None and self.noise_level > 0.0:
+            epoch = self.noise_injector.inject_noise(epoch, self.noise_type, self.noise_level)
+        
         return to_tensor(epoch), torch.tensor(label, dtype=torch.long), sid
 
     def get_metadata(self):

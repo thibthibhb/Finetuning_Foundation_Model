@@ -38,6 +38,9 @@ class ContractSpec:
     # Preprocessing
     required_preprocessing_fields: List[str]
     
+    # Noise injection fields for robustness analysis
+    required_noise_fields: List[str]
+    
     # Model & Training
     required_model_fields: List[str]
     required_training_fields: List[str]
@@ -243,6 +246,15 @@ class RunLoader:
                 'version_string': self._generate_preprocessing_version(config),
             },
             
+            # Noise Injection for Robustness Analysis
+            'noise': {
+                'noise_level': config.get('noise_level', 0.0),
+                'noise_type': config.get('noise_type', 'none'),
+                'noise_seed': config.get('noise_seed', 42),
+                'noise_enabled': config.get('noise_level', 0.0) > 0.0,
+                'noise_description': self._generate_noise_description(config),
+            },
+            
             # Model Architecture
             'model': {
                 'backbone': 'CBraMod',  # Fixed
@@ -415,6 +427,34 @@ class RunLoader:
                 return int(phase_data['values'][-1])
         return 1  # Default to phase 1 if no phase transition logged
     
+    def _generate_noise_description(self, config: Dict) -> str:
+        """Generate human-readable noise description for plots."""
+        noise_level = config.get('noise_level', 0.0)
+        noise_type = config.get('noise_type', 'none')
+        
+        if noise_level <= 0.0:
+            return 'Clean'
+        
+        # Create clean labels for plotting
+        type_labels = {
+            'realistic': 'Realistic',
+            'emg': 'EMG', 
+            'movement': 'Movement',
+            'electrode': 'Electrode',
+            'gaussian': 'Gaussian'
+        }
+        
+        clean_type = type_labels.get(noise_type, noise_type.title())
+        percentage = int(noise_level * 100)
+        
+        return f'{clean_type} {percentage}%'
+    
+    def _generate_preprocessing_version(self, config: Dict) -> str:
+        """Generate preprocessing version string."""
+        preprocess = config.get('preprocess', False)
+        sample_rate = config.get('sample_rate', 200)
+        return f"preprocess_{preprocess}_sr_{sample_rate}"
+    
     def _validate_contract_compliance(self, contract_data: Dict) -> Dict:
         """Validate that run meets contract requirements."""
         
@@ -425,6 +465,7 @@ class RunLoader:
         for field_group, required_fields in [
             ('dataset', self.contract.required_dataset_fields),
             ('preprocessing', self.contract.required_preprocessing_fields),
+            ('noise', self.contract.required_noise_fields),
             ('model', self.contract.required_model_fields),
             ('training', self.contract.required_training_fields),
             ('results', self.contract.required_result_fields),
@@ -729,6 +770,9 @@ def save_flat_versions(structured_runs: List[Dict], output_dir: Path, cohorts: D
         "contract.results.hours_of_data",
         "contract.dataset.num_subjects_train", "contract.dataset.data_fraction",
         "contract.dataset.datasets", "contract.dataset.name", "contract.dataset.dataset_names",  # Added datasets info
+        # Noise injection parameters for robustness analysis
+        "contract.noise.noise_level", "contract.noise.noise_type", "contract.noise.noise_enabled",
+        "contract.noise.noise_description", "contract.noise.noise_seed",
         "contract.training.batch_size", "contract.training.lr", "contract.training.head_lr", "contract.training.backbone_lr",
         "contract.training.epochs", "contract.training.optimizer", "contract.training.scheduler",
         "contract.training.weight_decay", "contract.training.label_smoothing",
@@ -838,13 +882,17 @@ def create_contract_spec() -> ContractSpec:
     """Create the comparison contract specification."""
     return ContractSpec(
         required_dataset_fields=[
-            'name', 'num_subjects_train', 'data_fraction'
+            'name', 'num_subjects_train'
         ],
         required_split_fields=[
             'orp_train_frac'  # Subject-level split info
         ],
         required_preprocessing_fields=[
             'sample_rate', 'window_length', 'version_string'
+        ],
+        # Noise injection fields for robustness analysis
+        required_noise_fields=[
+            'noise_level', 'noise_type', 'noise_seed'
         ],
         required_model_fields=[
             'backbone', 'use_pretrained_weights', 'head_type'

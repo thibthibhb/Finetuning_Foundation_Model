@@ -36,7 +36,6 @@ def main(return_params=False):
     parser.add_argument('--embedding_dim', type=int, default=512)
 
     # Data-related info
-    parser.add_argument('--data_fraction', type=float, default=1.0, help='Fraction of training data used')
     parser.add_argument('--num_subjects_train', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
     #parser.add_argument('--num_nights_train', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
 
@@ -78,6 +77,7 @@ def main(return_params=False):
     parser.add_argument("--run_name", type=str, default="test", help="WandB run name prefix")
     parser.add_argument('--use_weighted_sampler', type=bool, default=False,
                         help='Use weighted sampler to balance class distributions')
+    
     # ADD BY THIBAUT
     parser.add_argument('--weight_class', type=str, default=None,
                     help='Path to the .npy file of class weights (optional)')
@@ -121,25 +121,53 @@ def main(return_params=False):
     parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
     parser.add_argument('--preprocess', action='store_true', default=False,
                         help='If set, apply extra EEG preprocessing (notch harmonics, SG smoothing, etc.)')
-    # === In-Context Learning (ICL) toggles ===
-    parser.add_argument('--icl_mode', type=str, default='none', choices=['none', 'proto', 'cnp', 'set'],
-                        help='In-context mode: none (baseline), proto (prototypical), cnp (DeepSets), set (Set Transformer)')
-    parser.add_argument('--k_support', type=int, default=0,
-                        help='Per-class support size K for prototypical eval (0 = baseline only)')
-    parser.add_argument('--proto_temp', type=float, default=0.1,
-                        help='Temperature for cosine similarities in proto head')
-    parser.add_argument('--icl_eval_Ks', type=str, default='0,1,5,10',
-                        help='Comma-separated list of K values to sweep at test time (e.g., "0,1,5,10")')
-    parser.add_argument('--icl_hidden', type=int, default=256,
-                        help='Hidden dimension for ICL heads (DeepSets/Set Transformer)')
-    parser.add_argument('--icl_layers', type=int, default=2,
-                        help='Number of layers for Set Transformer ICL head')
     
-    # CLAUDE-ENHANCEMENT: Strengthened Set-ICL training parameters
-    parser.add_argument('--icl_loss_weight', type=float, default=0.15,
-                        help='Loss weight for ICL training (increased from 0.05 for stronger Set-ICL)')
-    parser.add_argument('--icl_contrastive_weight', type=float, default=0.1,
-                        help='Weight for supervised contrastive loss on ICL episode features')
+    # === Noise Injection for Robustness Analysis ===
+    parser.add_argument('--noise_level', type=float, default=0.0, 
+                        help='Noise injection level (0.0=no noise, 0.05=5%, 0.10=10%, 0.20=20%)')
+    parser.add_argument('--noise_type', type=str, default='realistic', 
+                        choices=['gaussian', 'emg', 'movement', 'electrode', 'realistic'],
+                        help='Type of noise to inject: gaussian, emg (muscle), movement, electrode (impedance), realistic (mixed)')
+    parser.add_argument('--noise_seed', type=int, default=42, 
+                        help='Random seed for noise injection (for reproducible experiments)')
+    
+    # === Robustness Study Parameters ===
+    parser.add_argument('--robustness_study', action='store_true',
+                        help='Run systematic robustness study across multiple noise conditions')
+    parser.add_argument('--robustness_trials', type=int, default=50,
+                        help='Number of trials for robustness study (when --robustness_study is enabled)')
+    
+    # === In-Context Learning (ICL) Parameters ===
+    parser.add_argument('--icl_mode', type=str, default='off', choices=['off', 'proto', 'meta_proto'],
+                        help='ICL mode: off (fine-tuning), proto (ICL no training), meta_proto (meta-ICL with episodic training)')
+    parser.add_argument('--icl_k', type=int, default=16,
+                        help='Number of support examples K per episode')
+    parser.add_argument('--icl_m', type=int, default=64,
+                        help='Number of query examples M per episode')
+    parser.add_argument('--icl_balance_support', action='store_true',
+                        help='Balance support set by class (round-robin sampling)')
+    parser.add_argument('--icl_proj_dim', type=int, default=512,
+                        help='Projection dimension for ICL head')
+    parser.add_argument('--icl_cosine', action='store_true',
+                        help='Use cosine similarity instead of L2 distance')
+    parser.add_argument('--freeze_backbone_for_icl', action='store_true', default=True,
+                        help='Freeze backbone parameters during ICL training')
+    
+    # === Weights & Biases Logging ===
+    parser.add_argument('--wandb_project', type=str, default='cbramod-ear-eeg',
+                        help='WandB project name')
+    parser.add_argument('--wandb_entity', type=str, default=None,
+                        help='WandB entity/username (optional)')
+    parser.add_argument('--wandb_group', type=str, default=None,
+                        help='WandB run group (optional)')
+    parser.add_argument('--wandb_offline', action='store_true',
+                        help='Run WandB in offline mode')
+    parser.add_argument('--no_wandb', action='store_true',
+                        help='Disable WandB logging entirely')
+    
+    # === Results CSV Export ===
+    parser.add_argument('--results_csv', type=str, default='./experiments/results/summary.csv',
+                        help='Path to CSV file for appending results')
 
     params = parser.parse_args()
     
@@ -194,7 +222,12 @@ def main(return_params=False):
         dataset = idun_datasets.MemoryEfficientKFoldDataset(
             seqs_labels_path_pair, 
             num_of_classes=params.num_of_classes,
-            label_mapping_version=getattr(params, 'label_mapping_version', 'v1')
+            label_mapping_version=getattr(params, 'label_mapping_version', 'v1'),
+            do_preprocess=getattr(params, 'preprocess', False),
+            sfreq=getattr(params, 'sample_rate', 200.0),
+            noise_level=getattr(params, 'noise_level', 0.0),
+            noise_type=getattr(params, 'noise_type', 'realistic'),
+            noise_seed=getattr(params, 'noise_seed', 42)
         )
 
         # Use single subject-level split

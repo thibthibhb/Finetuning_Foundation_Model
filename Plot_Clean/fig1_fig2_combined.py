@@ -23,87 +23,42 @@ from matplotlib.patches import Rectangle
 
 warnings.filterwarnings("ignore")
 
-# Okabe–Ito colorblind-friendly palette
-OKABE_ITO = [
-    "#0072B2",  # blue
-    "#E69F00",  # orange  
-    "#009E73",  # green
-    "#D55E00",  # vermillion
-    "#CC79A7",  # reddish purple
-    "#56B4E9",  # sky blue
-    "#F0E442",  # yellow
-    "#000000",  # black
-]
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    add_yasa_baseline, add_significance_marker,
+    bootstrap_ci_median, wilcoxon_test,
+    format_n_caption, add_sample_size_annotation
+)
 
-CB_COLORS = {
-    "cbramod": "#0072B2",      # teal/blue for CBraMod
-    "yasa": "#E69F00",         # warm orange for YASA
-    "t_star": "#009E73",      # green
-    "subjects": "#8C8C8C",    # neutral grey
-}
-
-def setup_plotting_style():
-    """Configure matplotlib for publication-ready plots."""
-    plt.style.use("default")
+def setup_combined_figure_style():
+    """Setup style specifically for combined figures."""
+    setup_figure_style()
     plt.rcParams.update({
-        "figure.figsize": (12, 12),
-        "font.family": "sans-serif", 
-        "font.sans-serif": ["Arial", "DejaVu Sans"],
-        "font.size": 12,
-        "axes.titlesize": 14,
-        "axes.labelsize": 12,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 11,
-        "figure.dpi": 120,
-        "savefig.dpi": 300,
-        "savefig.bbox": "tight",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "grid.alpha": 0.3,
-        "axes.axisbelow": True,
-        "axes.prop_cycle": plt.cycler(color=OKABE_ITO),
+        "figure.figsize": (12, 12),  # Larger for combined plots
     })
 
-def bootstrap_ci_median(arr: np.ndarray, confidence: float = 0.95) -> tuple:
-    """Calculate bootstrap CI for median."""
-    arr = np.asarray(arr, dtype=float)
-    arr = arr[~np.isnan(arr)]
-    if arr.size < 3:
-        return np.nan, np.nan
+def jeffreys_interval(successes: int, total: int, confidence: float = 0.95) -> tuple:
+    """Calculate Jeffreys interval (Beta-Bernoulli) for proportion."""
+    if total == 0:
+        return 0.0, 0.0, 1.0
     
-    try:
-        rng = np.random.default_rng(42)
-        res = bootstrap((arr,), np.median, n_resamples=1000,
-                       confidence_level=confidence, random_state=rng)
-        return float(res.confidence_interval.low), float(res.confidence_interval.high)
-    except:
-        return np.nan, np.nan
-
-def bootstrap_ci_proportion(successes: int, total: int, confidence: float = 0.95) -> tuple:
-    """Calculate bootstrap CI for a proportion."""
-    if total < 3:
-        return np.nan, np.nan
+    # Jeffreys prior: Beta(0.5, 0.5)
+    alpha = 0.5 + successes
+    beta_param = 0.5 + total - successes
     
-    try:
-        data = np.array([1] * successes + [0] * (total - successes))
-        def prop_stat(x):
-            return np.mean(x)
-        
-        rng = np.random.default_rng(42)
-        res = bootstrap((data,), prop_stat, n_resamples=1000,
-                       confidence_level=confidence, random_state=rng)
-        return res.confidence_interval.low, res.confidence_interval.high
-    except:
-        # Wilson score interval fallback
-        p = successes / total
-        z = 1.96  # 95% CI
-        n = total
-        denominator = 1 + z**2/n
-        center = (p + z**2/(2*n)) / denominator
-        margin = z * np.sqrt(p*(1-p)/n + z**2/(4*n**2)) / denominator
-        return max(0, center - margin), min(1, center + margin)
+    from scipy.stats import beta as beta_dist
+    
+    alpha_level = (1 - confidence) / 2
+    
+    # Calculate credible interval
+    ci_low = beta_dist.ppf(alpha_level, alpha, beta_param)
+    ci_high = beta_dist.ppf(1 - alpha_level, alpha, beta_param)
+    
+    # Point estimate (posterior mean)
+    point_est = alpha / (alpha + beta_param)
+    
+    return point_est, ci_low, ci_high
 
 def wilcoxon_test(delta_values: np.ndarray) -> float:
     """Wilcoxon signed-rank test against zero."""
@@ -446,17 +401,17 @@ def create_combined_figure(df: pd.DataFrame, output_dir: Path):
     max_subjects = max(stats_df['num_subjects'])
     
     # YASA baseline as simple horizontal line
-    ax1.axhline(y=yasa_kappa, color=CB_COLORS["yasa"], linestyle='--', linewidth=1.8, 
+    ax1.axhline(y=yasa_kappa, color=get_color("yasa"), linestyle='--', linewidth=1.8, 
                label=f'YASA baseline (κ={yasa_kappa:.3f})', zorder=2)
 
     # T* marker (first crossing of YASA baseline)
     crossing_points = [int(r['num_subjects']) for _, r in stats_df.iterrows() if r['median_kappa'] > yasa_kappa]
     if crossing_points:
         first_crossing = min(crossing_points)
-        ax1.axvline(x=first_crossing, color=CB_COLORS["t_star"], linestyle='-', alpha=0.8, linewidth=2,
+        ax1.axvline(x=first_crossing, color=get_color("t_star"), linestyle='-', alpha=0.8, linewidth=2,
                    label=f'T* = {first_crossing}')
         ax1.text(first_crossing + 0.5, ax1.get_ylim()[1] - 0.02, 'T*', 
-                fontweight='bold', fontsize=12, ha='left', va='top', color=CB_COLORS["t_star"])
+                fontweight='bold', fontsize=12, ha='left', va='top', color=get_color("t_star"))
 
     ax1.set_xlabel('Number of training subjects (calibration cohort size)', fontweight='bold')
     ax1.set_ylabel("Cohen's κ", fontweight='bold')
@@ -471,8 +426,8 @@ def create_combined_figure(df: pd.DataFrame, output_dir: Path):
                                          markeredgecolor='white', markeredgewidth=1.5, label=dataset_comp))
     # Add other elements
     if crossing_points:
-        legend_elements.append(plt.Line2D([0], [0], color=CB_COLORS["t_star"], linewidth=2, label=f'T* = {first_crossing}'))
-    legend_elements.append(plt.Line2D([0], [0], color=CB_COLORS["yasa"], linestyle='--', linewidth=1.8, label=f'YASA baseline (κ={yasa_kappa:.3f})'))
+        legend_elements.append(plt.Line2D([0], [0], color=get_color("t_star"), linewidth=2, label=f'T* = {first_crossing}'))
+    legend_elements.append(plt.Line2D([0], [0], color=get_color("yasa"), linestyle='--', linewidth=1.8, label=f'YASA baseline (κ={yasa_kappa:.3f})'))
     ax1.legend(handles=legend_elements, loc='lower right', frameon=True, fancybox=True, shadow=True, bbox_to_anchor=(1.0, 0.0))
     ax1.grid(True, alpha=0.3, axis='y')
     ax1.set_axisbelow(True)
@@ -485,14 +440,11 @@ def create_combined_figure(df: pd.DataFrame, output_dir: Path):
     y_max = max(stats_df['median_kappa'].max() + 0.10, yasa_kappa + 0.10)
     ax1.set_ylim(y_min, y_max)
     
-    # ===== FIGURE 2: Top-Performer Distribution Analysis (Bottom Panel) =====
-    print("Processing data for Figure 2: Top-performer distributions per subject count...")
+    # ===== FIGURE 2: Reliability Curve Analysis (Bottom Panel) =====
+    print("Processing data for Figure 2: Reliability curve analysis...")
     
-    # Configuration
-    SHOW_SUCCESS_RATE = False  # Set to True to show success rate annotations
-    
-    # Build best-run-per-subject data for each subject count
-    top_performer_data = []
+    # Build subject-level reliability data for each subject count
+    reliability_data = []
     
     for subj_count in sorted(df['num_subjects'].unique()):
         subj_df = df[df['num_subjects'] == subj_count].copy()
@@ -500,159 +452,147 @@ def create_combined_figure(df: pd.DataFrame, output_dir: Path):
         if len(subj_df) == 0:
             continue
         
-        # Get top-10 runs at this subject count for reliability analysis
-        top_10_runs = subj_df.nlargest(10, 'test_kappa') if len(subj_df) >= 10 else subj_df
+        # Group by subject and get their runs
+        subject_success_data = []
+        subjects = subj_df['subject'].unique()
+        n_subjects = len(subjects)
         
-        # Calculate success rate (how many of top-10 beat YASA)
-        n_beats_yasa = sum(1 for _, run in top_10_runs.iterrows() if run['test_kappa'] > yasa_kappa)
-        success_rate = n_beats_yasa / len(top_10_runs)
+        if n_subjects < 5:  # Skip if too few subjects
+            print(f"  T={int(subj_count)}: Skipping (n_subjects={n_subjects} < 5)")
+            continue
+            
+        print(f"  T={int(subj_count)}: Processing {n_subjects} subjects...")
         
-        # Get best run per subject within the top-10
-        best_per_subject = []
-        for subject_id in top_10_runs['subject'].unique():
-            subj_runs = top_10_runs[top_10_runs['subject'] == subject_id]
-            best_run = subj_runs.loc[subj_runs['test_kappa'].idxmax()]
-            best_per_subject.append({
-                'num_subjects': int(subj_count),
-                'subject': subject_id,
-                'test_kappa': best_run['test_kappa'],
-                'delta_kappa': best_run['test_kappa'] - yasa_kappa,
-                'success_rate': success_rate,
-                'n_top10': len(top_10_runs),
-                'n_beats_yasa': n_beats_yasa
+        for subject in subjects:
+            subj_runs = subj_df[subj_df['subject'] == subject].copy()
+            if len(subj_runs) == 0:
+                continue
+                
+            # Sort by test_kappa descending
+            subj_runs = subj_runs.sort_values('test_kappa', ascending=False)
+            
+            # Best-of-1: single best run beats YASA
+            best_1_kappa = subj_runs['test_kappa'].iloc[0]
+            success_1 = 1 if best_1_kappa > yasa_kappa else 0
+            
+            # Best-of-3: best of up to 3 runs beats YASA
+            best_3_runs = subj_runs.head(3)
+            best_3_kappa = best_3_runs['test_kappa'].max()
+            success_3 = 1 if best_3_kappa > yasa_kappa else 0
+            
+            subject_success_data.append({
+                'subject': subject,
+                'success_1': success_1,
+                'success_3': success_3,
+                'n_runs': len(subj_runs)
             })
         
-        top_performer_data.extend(best_per_subject)
-        print(f"Figure 2: S={subj_count}: {len(best_per_subject)} best-per-subject, {n_beats_yasa}/{len(top_10_runs)} beat YASA")
+        if not subject_success_data:
+            continue
+            
+        success_df = pd.DataFrame(subject_success_data)
+        
+        # Calculate reliability statistics
+        n_subjects = len(success_df)
+        successes_1 = success_df['success_1'].sum()
+        successes_3 = success_df['success_3'].sum()
+        
+        # Use Jeffreys intervals for reliability estimates
+        r1_est, r1_low, r1_high = jeffreys_interval(successes_1, n_subjects)
+        r3_est, r3_low, r3_high = jeffreys_interval(successes_3, n_subjects)
+        
+        reliability_data.append({
+            'T': int(subj_count),
+            'n': n_subjects,
+            'succ1': successes_1,
+            'r1': r1_est,
+            'r1_low': r1_low, 
+            'r1_high': r1_high,
+            'succ3': successes_3,
+            'r3': r3_est,
+            'r3_low': r3_low,
+            'r3_high': r3_high
+        })
+        
+        print(f"  T={subj_count}: r(1)={r1_est:.3f} [{r1_low:.3f},{r1_high:.3f}], r(3)={r3_est:.3f} [{r3_low:.3f},{r3_high:.3f}] ({successes_3}/{n_subjects})")
     
-    if not top_performer_data:
-        print("No top-performer data for Figure 2")
+    if not reliability_data:
+        print("No reliability data for Figure 2")
         return None
     
-    top_df = pd.DataFrame(top_performer_data)
-    subject_counts = sorted(top_df['num_subjects'].unique())
+    reliability_df = pd.DataFrame(reliability_data)
     
-    # Create beeswarm/violin hybrid plot for best-per-subject distributions
-    violin_data_dict = {}
-    overlay_stats = {}
+    # Print table
+    print(f"\n{'T':>3} {'n':>3} {'succ1':>5} {'r1':>5} {'r1_low':>6} {'r1_high':>7} {'succ3':>5} {'r3':>5} {'r3_low':>6} {'r3_high':>7}")
+    print("-" * 65)
+    for _, row in reliability_df.iterrows():
+        print(f"{row['T']:>3} {row['n']:>3} {row['succ1']:>5} {row['r1']:>5.3f} {row['r1_low']:>6.3f} "
+              f"{row['r1_high']:>7.3f} {row['succ3']:>5} {row['r3']:>5.3f} {row['r3_low']:>6.3f} {row['r3_high']:>7.3f}")
     
-    for subj_count in subject_counts:
-        subj_data = top_df[top_df['num_subjects'] == subj_count]
-        delta_values = subj_data['delta_kappa'].values
+    subject_counts = reliability_df['T'].values
+    
+    # Plot reliability curves with Jeffreys intervals
+    # Best-of-1 curve (blue, circles)
+    ax2.errorbar(subject_counts, reliability_df['r1'], 
+                yerr=[reliability_df['r1'] - reliability_df['r1_low'],
+                      reliability_df['r1_high'] - reliability_df['r1']],
+                marker='o', markersize=7, linewidth=2.5, capsize=3, capthick=1.5,
+                color='#1f77b4', markerfacecolor='#1f77b4', markeredgecolor='white', 
+                markeredgewidth=1.5, label='Best-of-1', zorder=3)
+    
+    # Best-of-3 curve (magenta, squares)
+    ax2.errorbar(subject_counts, reliability_df['r3'],
+                yerr=[reliability_df['r3'] - reliability_df['r3_low'],
+                      reliability_df['r3_high'] - reliability_df['r3']], 
+                marker='s', markersize=7, linewidth=2.5, capsize=3, capthick=1.5,
+                color='#b03a9c', markerfacecolor='#b03a9c', markeredgecolor='white',
+                markeredgewidth=1.5, label='Best-of-3', zorder=3)
+    
+    # Add n(T) annotations above each point
+    for _, row in reliability_df.iterrows():
+        T = int(row['T'])
+        n_subjects = row['n']
+        max_r = max(row['r1_high'], row['r3_high'])
         
-        violin_data_dict[subj_count] = delta_values
-        
-        # Calculate overlay statistics (upper-tail focus)
-        top3_mean = np.mean(np.partition(delta_values, -min(3, len(delta_values)))[-min(3, len(delta_values)):])
-        single_best = np.max(delta_values)
-        success_rate = subj_data['success_rate'].iloc[0]
-        n_beats_yasa = subj_data['n_beats_yasa'].iloc[0] 
-        n_top10 = subj_data['n_top10'].iloc[0]
-        
-        overlay_stats[subj_count] = {
-            'top3_mean': top3_mean,
-            'single_best': single_best,
-            'success_rate': success_rate,
-            'n_beats_yasa': n_beats_yasa,
-            'n_top10': n_top10
-        }
+        ax2.text(T, max_r + 0.03, f'n={n_subjects}', 
+               ha='center', va='bottom', fontsize=8, color='gray', alpha=0.8)
     
-    # Create violin plot for best-per-subject distributions
-    violin_parts = ax2.violinplot(
-        [violin_data_dict[sc] for sc in subject_counts],
-        positions=subject_counts,
-        widths=1.8,
-        showmeans=False,
-        showmedians=False,
-        showextrema=False
-    )
+    # Random chance baseline (dotted line at 0.5)
+    ax2.axhline(y=0.5, color='gray', linestyle=':', linewidth=1.5, alpha=0.7, 
+               label='Random chance (50%)')
     
-    # Color the violins with champion-focused color (reduced visual dominance)
-    for pc in violin_parts['bodies']:
-        pc.set_facecolor('#4CAF50')  # Green for champions
-        pc.set_alpha(0.3)  # Reduced alpha for less dominance
-        pc.set_edgecolor('black')
-        pc.set_linewidth(0.6)
-        pc.set_zorder(1)  # Behind the points
-    
-    # Add overlay markers and annotations
-    for subj_count in subject_counts:
-        stats = overlay_stats[subj_count]
-        
-        # Diamond for top-3 mean (smaller, professional)
-        ax2.scatter(subj_count, stats['top3_mean'], marker='D', s=25, 
-                   color='#FF6B35', edgecolor='black', linewidth=0.5, 
-                   alpha=0.9, zorder=3, label='Top-3 mean' if subj_count == subject_counts[0] else "")
-        
-        # Triangle for single best (replaced star with small triangle)
-        ax2.scatter(subj_count, stats['single_best'], marker='^', s=30, 
-                   color='#FFD700', edgecolor='black', linewidth=0.5, 
-                   alpha=0.9, zorder=3, label='Single best' if subj_count == subject_counts[0] else "")
-        
-        # Success rate annotation (gated behind flag)
-        if SHOW_SUCCESS_RATE:
-            success_text = f"{stats['n_beats_yasa']}/{stats['n_top10']}"
-            ax2.text(subj_count, -0.12, success_text, ha='center', va='center',
-                    fontsize=10, fontweight='bold', 
-                    bbox=dict(boxstyle="round,pad=0.2", facecolor='lightblue', alpha=0.8))
-    
-    # Zero line (no improvement over YASA) - thin baseline
-    ax2.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.2, 
-               alpha=0.8, zorder=0.5)
-    
-    ax2.set_xlabel('Number of training subjects (calibration cohort size)', fontweight='bold')
-    ax2.set_ylabel('Δκ vs YASA', fontweight='bold')
-    ax2.set_title('Panel B: Top-Performer Reliability Analysis\n(Best run per subject from top-10)', 
+    # Styling
+    ax2.set_xlabel('Training subjects T', fontweight='bold')
+    ax2.set_ylabel('Reliability r(T)', fontweight='bold') 
+    ax2.set_title('Probability of beating YASA baseline — T* = none', 
                   fontweight='bold', pad=15)
     
-    # Create legend with all elements (updated to match new styling)
-    legend_elements = [
-        plt.Line2D([0], [0], color=CB_COLORS['yasa'], linestyle='--', linewidth=1.2, 
-                  alpha=0.8, label='YASA baseline (Δκ=0)'),
-        plt.Line2D([0], [0], marker='D', color='#FF6B35', linewidth=0, markersize=5, 
-                  markerfacecolor='#FF6B35', markeredgecolor='black', markeredgewidth=0.5, 
-                  alpha=0.9, label='Top-3 mean'),
-        plt.Line2D([0], [0], marker='^', color='#FFD700', linewidth=0, markersize=6, 
-                  markerfacecolor='#FFD700', markeredgecolor='black', markeredgewidth=0.5, 
-                  alpha=0.9, label='Single best'),
-        plt.Rectangle((0,0),1,1, facecolor='#4CAF50', alpha=0.3, edgecolor='black', 
-                     linewidth=0.6, label='Best-per-subject distribution')
-    ]
+    # Set y-axis to probability range [0,1]
+    ax2.set_ylim(0, 1)
+    ax2.set_yticks(np.arange(0, 1.1, 0.2))
+    ax2.set_yticklabels([f'{y:.1f}' for y in np.arange(0, 1.1, 0.2)])
     
-    # Position legend outside plot area to prevent overlap
-    leg = ax2.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.01, 1), 
-                    borderaxespad=0, frameon=False)
+    # Match x-axis with Panel A
+    ax2.set_xticks(x_ticks)
+    ax2.set_xlim(0, max_subjects + 2)
+    
+    # Clean grid behind data
     ax2.grid(True, alpha=0.3, axis='y')
     ax2.set_axisbelow(True)
     
-    # Set x-axis to match upper panel with margins for clean layout
-    ax2.set_xticks(x_ticks)
-    ax2.set_xlim(0, max_subjects + 2)
-    ax2.margins(x=0.05)  # Prevent x-tick labels from colliding with figure border
+    # Legend positioned outside bottom-right to never overlap
+    ax2.legend(bbox_to_anchor=(1.0, -0.05), loc="upper right", 
+               frameon=True, fancybox=True, shadow=False, framealpha=0.95)
     
-    # Set y-axis limits (adjust based on whether annotations are shown)
-    if top_df['delta_kappa'].size > 0:
-        if SHOW_SUCCESS_RATE:
-            y_min_panel2 = min(-0.18, top_df['delta_kappa'].min() - 0.05)
-        else:
-            y_min_panel2 = top_df['delta_kappa'].min() - 0.05
-        y_max_panel2 = top_df['delta_kappa'].max() + 0.05
-        ax2.set_ylim(y_min_panel2, y_max_panel2)
-    
-    # Adjust layout to prevent legend overlap and provide space for future notes
-    plt.subplots_adjust(right=0.82, bottom=0.18)
-    
-    # Optional: Add explanatory footer only if success rate is shown
-    if SHOW_SUCCESS_RATE:
-        fig.text(0.5, 0.02, 'Numbers below violins show success rate: top-10 runs beating YASA baseline at each subject count', 
-                 ha='center', va='bottom', fontsize=10, style='italic', alpha=0.8)
+    # Layout adjustment for legend
+    plt.subplots_adjust(right=0.95, bottom=0.12)
     
     # Save figure
     output_dir.mkdir(parents=True, exist_ok=True)
-    fig_svg = output_dir / 'figure_1_2_combined_calibration_analysis.svg'
+    base_path = output_dir / 'figure_1_2_combined_calibration_analysis'
     
-    plt.savefig(fig_svg)
-    print(f"Saved: {fig_svg}")
+    plt.tight_layout()
+    save_figure(fig, base_path)
     
     # Summary statistics
     print(f"\nSummary:")
@@ -675,7 +615,7 @@ def main():
     parser.add_argument("--out", default="Plot_Clean/figures/fig1_2_combined", help="Output directory")
     args = parser.parse_args()
 
-    setup_plotting_style()
+    setup_combined_figure_style()
     
     # Load and prepare data EXACTLY like fig1_from_csv.py
     print("Loading data and selecting top 10 runs per subject count...")

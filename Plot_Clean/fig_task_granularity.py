@@ -2,10 +2,12 @@
 """
 Task Granularity Analysis: 5-class vs 4-class sleep staging performance
 
-Compares:
-- 5-class: Wake, N1, N2, N3, REM
-- 4-class v0: Wake, N1, N2+N3, REM  
-- 4-class v1: Wake, Light(N1+N2), Deep(N3), REM
+HIGH-IMPACT REDESIGN:
+- Lead with the difference: Main panel shows Δ = (4c - 5c) per subject  
+- One metric per axis with identical y-limits for easy comparison
+- Concise statistical summary with median Δ, 95% CI, and p-value
+- Remove duplication: focus on boxplots, drop slope graphs
+- Clear mapping: 4c merges Light(N1+N2), Deep(N3), versus 5c: N1, N2, N3
 
 Usage:
     python fig_task_granularity.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
@@ -18,34 +20,24 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy import stats
 
-# Colors for different configurations
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    add_yasa_baseline, add_significance_marker,
+    bootstrap_ci_median, wilcoxon_test,
+    format_n_caption, add_sample_size_annotation
+)
+
+# Publication colors (colorblind-safe) - updated to use figure_style
 COLORS = {
-    '5-class': '#2E8B57',      # Sea green
-    '4-class-v0': '#4169E1',   # Royal blue  
-    '4-class-v1': '#FF6347',   # Tomato red
-    '4-class': '#1f77b4'       # Default blue for undifferentiated 4-class
+    '5-class': get_color('5_class'),
+    '4-class-v1': get_color('4_class'),
+    'better': get_color('cbramod'),       # Green for 4c > 5c
+    'worse': get_color('yasa'),           # Red for 5c > 4c
+    'neutral': get_color('subjects')      # Gray
 }
 
-def setup_style():
-    """Setup publication-ready matplotlib style."""
-    plt.style.use('default')
-    plt.rcParams.update({
-        'font.family': 'sans-serif',
-        'font.size': 11,
-        'axes.labelsize': 12,
-        'axes.titlesize': 14,
-        'axes.labelweight': 'bold',
-        'xtick.labelsize': 10,
-        'ytick.labelsize': 10,
-        'legend.fontsize': 10,
-        'axes.spines.top': False,
-        'axes.spines.right': False,
-        'axes.grid': True,
-        'grid.alpha': 0.3,
-        'figure.dpi': 300,
-        'savefig.dpi': 300,
-        'savefig.bbox': 'tight'
-    })
+# Removed - using setup_figure_style() from figure_style.py instead
 
 def resolve_columns(df):
     """Resolve key columns from CSV."""
@@ -102,19 +94,17 @@ def create_task_config(row):
     if nc == 5:
         return '5-class'
     elif nc == 4:
-        if 'v0' in str(lv).lower():
-            return '4-class-v0'
-        elif 'v1' in str(lv).lower():
+        # Focus on v1 mapping: Light(N1+N2), Deep(N3)
+        if 'v1' in str(lv).lower():
             return '4-class-v1'
         else:
-            return '4-class'
+            return '4-class-v1'  # Default to v1 for consistency
     else:
         return f'{int(nc)}-class'
 
 def select_best_runs(df):
     """Select best run per subject-config combination."""
     def pick_best(group):
-        # Use validation kappa if available, else test kappa
         if group['val_kappa'].notna().any():
             return group.loc[group['val_kappa'].idxmax()]
         else:
@@ -126,24 +116,16 @@ def select_best_runs(df):
     
     return best_runs
 
-def filter_paired(df_best, prefer="auto"):
-    """Filter to subjects who have both 5-class and one 4-class config for paired comparison."""
-    # Choose which 4-class variant to compare: "v0", "v1", "auto"
-    df4 = df_best[df_best['task_config'].str.startswith('4-class')]
-    if prefer in ("v0", "v1"):
-        target_config = f'4-class-{prefer}'
-        if target_config in df4['task_config'].unique():
-            df4 = df4[df4['task_config'] == target_config]
-    
-    # Keep best 4-class per subject if multiple variants exist
-    df4 = df4.sort_values('val_kappa', ascending=False).drop_duplicates('subject')
-    
+def filter_paired(df_best):
+    """Filter to subjects who have both 5-class and 4-class-v1 for paired comparison."""
+    df4 = df_best[df_best['task_config'] == '4-class-v1']
     df5 = df_best[df_best['task_config'] == '5-class']
+    
     paired_subj = set(df4['subject']).intersection(set(df5['subject']))
     
     print(f"\nPaired filtering results:")
-    print(f"  Total subjects with 4-class: {len(set(df4['subject']))}")
-    print(f"  Total subjects with 5-class: {len(set(df5['subject']))}")
+    print(f"  Subjects with 4-class-v1: {len(set(df4['subject']))}")
+    print(f"  Subjects with 5-class: {len(set(df5['subject']))}")
     print(f"  Subjects with both configs: {len(paired_subj)}")
     
     filtered_df = pd.concat([
@@ -153,10 +135,10 @@ def filter_paired(df_best, prefer="auto"):
     
     return filtered_df
 
-def paired_delta_ci(df, metric, four='4-class'):
-    """Calculate paired delta with bootstrap CI and directional Wilcoxon tests."""
+def calculate_paired_stats(df, metric):
+    """Calculate paired statistics with bootstrap CI and effect sizes."""
     # Build paired vectors
-    subjects = sorted(set(df[df['task_config'].str.startswith(four)]['subject']).intersection(
+    subjects = sorted(set(df[df['task_config']=='4-class-v1']['subject']).intersection(
                      set(df[df['task_config']=='5-class']['subject'])))
     
     if len(subjects) == 0:
@@ -166,41 +148,34 @@ def paired_delta_ci(df, metric, four='4-class'):
     y = []  # 5-class values
     
     for s in subjects:
-        # Handle different 4-class variants
-        four_class_data = df[(df['subject']==s) & df['task_config'].str.startswith(four)]
-        if len(four_class_data) == 0:
-            continue
-        # Take best if multiple 4-class variants
-        if len(four_class_data) > 1:
-            four_class_data = four_class_data.sort_values('val_kappa', ascending=False).iloc[:1]
+        four_data = df[(df['subject']==s) & (df['task_config']=='4-class-v1')]
+        five_data = df[(df['subject']==s) & (df['task_config']=='5-class')]
         
-        five_class_data = df[(df['subject']==s) & (df['task_config']=='5-class')]
-        if len(five_class_data) == 0:
-            continue
-            
-        x.append(four_class_data[metric].iloc[0])
-        y.append(five_class_data[metric].iloc[0])
+        if len(four_data) > 0 and len(five_data) > 0:
+            x.append(four_data[metric].iloc[0])
+            y.append(five_data[metric].iloc[0])
     
     x = np.array(x)
     y = np.array(y)
-    delta = y - x  # 5c - 4c (positive means 5-class better)
+    delta = x - y  # 4c - 5c (positive means 4-class better)
     
     if len(delta) < 2:
         return None
     
-    # Bootstrap CI of median Δ
-    rng = np.random.default_rng(42)
-    boots = [np.median(rng.choice(delta, size=len(delta), replace=True)) for _ in range(4000)]
-    ci = (np.percentile(boots, 2.5), np.percentile(boots, 97.5))
+    # Bootstrap CI of median Δ using consistent function
     med = float(np.median(delta))
+    ci = bootstrap_ci_median(delta)
     
-    # Wilcoxon tests
+    # Wilcoxon test (directional: 4c > 5c) using consistent function
+    p_two = wilcoxon_test(delta)
     try:
-        p_two = stats.wilcoxon(x, y, zero_method='pratt', alternative='two-sided').pvalue
-        p_less = stats.wilcoxon(x, y, zero_method='pratt', alternative='less').pvalue  # 4c > 5c
-        p_greater = stats.wilcoxon(x, y, zero_method='pratt', alternative='greater').pvalue  # 5c > 4c
+        p_greater = stats.wilcoxon(x, y, zero_method='pratt', alternative='greater').pvalue  # 4c > 5c
+        # Effect size: rank-biserial correlation 
+        w_stat = stats.wilcoxon(x, y, zero_method='pratt', alternative='two-sided').statistic
+        n = len(delta)
+        r = 1 - (2 * w_stat) / (n * (n + 1))  # Rank-biserial r
     except:
-        p_two = p_less = p_greater = np.nan
+        p_greater = r = np.nan
     
     return {
         'subjects': subjects,
@@ -209,231 +184,134 @@ def paired_delta_ci(df, metric, four='4-class'):
         'med': med,
         'ci': ci,
         'p_two': p_two,
-        'p_less': p_less,
         'p_greater': p_greater,
+        'effect_size': r,
         'x_values': x,  # 4-class values
         'y_values': y   # 5-class values
     }
 
-def bootstrap_ci(data, n_boot=2000, confidence=0.95):
-    """Bootstrap confidence interval for median."""
-    if len(data) < 2:
-        return np.nan, np.nan
-    
-    np.random.seed(42)
-    boot_medians = []
-    for _ in range(n_boot):
-        sample = np.random.choice(data, size=len(data), replace=True)
-        boot_medians.append(np.median(sample))
-    
-    alpha = 1 - confidence
-    lower = np.percentile(boot_medians, 100 * alpha / 2)
-    upper = np.percentile(boot_medians, 100 * (1 - alpha / 2))
-    return lower, upper
-
-def wilcoxon_test(x, y):
-    """Wilcoxon signed-rank test for paired data."""
-    try:
-        stat, p = stats.wilcoxon(x, y, alternative='two-sided')
-        return p
-    except:
-        return np.nan
-
-def plot_performance_comparison(df, metric, ax, title):
-    """Plot performance comparison across task configurations."""
-    configs = ['5-class', '4-class-v0', '4-class-v1', '4-class']
-    configs = [c for c in configs if c in df['task_config'].values]
-    
-    positions = np.arange(len(configs))
-    
-    # Box plots
-    data_by_config = [df[df['task_config'] == config][metric].dropna().values 
-                      for config in configs]
-    
-    bp = ax.boxplot(data_by_config, positions=positions, patch_artist=True,
-                    tick_labels=configs, widths=0.6)
-    
-    # Color the boxes
-    for patch, config in zip(bp['boxes'], configs):
-        patch.set_facecolor(COLORS.get(config, '#lightgray'))
-        patch.set_alpha(0.7)
-    
-    # Add scatter points
-    for i, config in enumerate(configs):
-        data = df[df['task_config'] == config][metric].dropna()
-        if len(data) > 0:
-            y = data.values
-            x = np.random.normal(i, 0.04, size=len(y))  # Add jitter
-            ax.scatter(x, y, alpha=0.5, s=20, color=COLORS.get(config, 'gray'))
-    
-    # Add statistical annotations
-    medians = []
-    cis = []
-    ns = []
-    
-    for config in configs:
-        data = df[df['task_config'] == config][metric].dropna()
-        if len(data) > 0:
-            median = np.median(data)
-            ci_low, ci_high = bootstrap_ci(data)
-            medians.append(median)
-            cis.append((ci_low, ci_high))
-            ns.append(len(data))
-        else:
-            medians.append(np.nan)
-            cis.append((np.nan, np.nan))
-            ns.append(0)
-    
-    # Add N and median annotations
-    for i, (config, median, (ci_low, ci_high), n) in enumerate(zip(configs, medians, cis, ns)):
-        if not np.isnan(median):
-            # N annotation at top
-            ax.text(i, ax.get_ylim()[1] * 0.95, f'N={n}', 
-                   ha='center', va='top', fontsize=9, weight='bold')
-            
-            # Median annotation
-            ax.text(i, median + 0.01, f'{median:.3f}', 
-                   ha='center', va='bottom', fontsize=8, 
-                   bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-    
-    ax.set_ylabel(metric.replace('_', ' ').title())
-    ax.set_title(title)
-    ax.tick_params(axis='x', rotation=15)
-    
-    return medians, cis, ns
-
-def plot_paired_comparison(df, ax):
-    """Plot paired comparison between configs where subjects have both."""
-    # Find subjects with multiple configs
-    subject_configs = df.groupby('subject')['task_config'].apply(list).reset_index()
-    
-    # Focus on 5-class vs 4-class comparisons
-    paired_data = []
-    for _, row in subject_configs.iterrows():
-        configs = row['task_config']
-        if '5-class' in configs:
-            for four_class in ['4-class-v0', '4-class-v1', '4-class']:
-                if four_class in configs:
-                    subj = row['subject']
-                    kappa_5c = df[(df['subject'] == subj) & (df['task_config'] == '5-class')]['test_kappa'].iloc[0]
-                    kappa_4c = df[(df['subject'] == subj) & (df['task_config'] == four_class)]['test_kappa'].iloc[0]
-                    
-                    f1_5c = df[(df['subject'] == subj) & (df['task_config'] == '5-class')]['test_f1'].iloc[0]
-                    f1_4c = df[(df['subject'] == subj) & (df['task_config'] == four_class)]['test_f1'].iloc[0]
-                    
-                    paired_data.append({
-                        'subject': subj,
-                        'comparison': f'5-class vs {four_class}',
-                        'kappa_5c': kappa_5c,
-                        'kappa_4c': kappa_4c,
-                        'f1_5c': f1_5c,
-                        'f1_4c': f1_4c,
-                        'delta_kappa': kappa_5c - kappa_4c,
-                        'delta_f1': f1_5c - f1_4c
-                    })
-    
-    if not paired_data:
-        ax.text(0.5, 0.5, 'No paired comparisons available', 
-                ha='center', va='center', transform=ax.transAxes)
-        ax.set_title('Paired Comparisons')
+def plot_delta_main(df, metric, ax, stats_dict):
+    """Main panel: Plot Δ = (4c - 5c) per subject with CI."""
+    if stats_dict is None:
+        ax.text(0.5, 0.5, 'No paired data available', ha='center', va='center', 
+                transform=ax.transAxes, fontsize=14)
         return
     
-    paired_df = pd.DataFrame(paired_data)
+    delta = stats_dict['delta']
+    subjects = stats_dict['subjects']
+    med = stats_dict['med']
+    ci = stats_dict['ci']
+    p_val = stats_dict['p_two']
+    r_effect = stats_dict['effect_size']
     
-    # Group by comparison type
-    comparisons = paired_df['comparison'].unique()
+    # Sort subjects by delta for better visualization
+    sort_idx = np.argsort(delta)
+    delta_sorted = delta[sort_idx]
+    subjects_sorted = [subjects[i] for i in sort_idx]
     
-    x_pos = 0
-    colors = ['red', 'blue', 'green']
+    # Plot individual subject deltas with directional colors
+    x_pos = np.arange(len(delta_sorted))
+    colors = [COLORS['better'] if d > 0 else COLORS['worse'] if d < 0 else COLORS['neutral'] 
+              for d in delta_sorted]
     
-    for i, comparison in enumerate(comparisons):
-        comp_data = paired_df[paired_df['comparison'] == comparison]
-        
-        # Plot lines connecting paired points
-        for _, row in comp_data.iterrows():
-            ax.plot([x_pos, x_pos + 0.8], [row['kappa_4c'], row['kappa_5c']], 
-                   'o-', alpha=0.6, color=colors[i % len(colors)], linewidth=1, markersize=4)
-        
-        # Add median points
-        median_4c = comp_data['kappa_4c'].median()
-        median_5c = comp_data['kappa_5c'].median()
-        
-        ax.plot([x_pos, x_pos + 0.8], [median_4c, median_5c], 
-               'o-', color=colors[i % len(colors)], linewidth=3, markersize=8,
-               label=comparison)
-        
-        # Statistical test
-        p_val = wilcoxon_test(comp_data['kappa_4c'], comp_data['kappa_5c'])
-        
-        # Add annotations
-        ax.text(x_pos + 0.4, max(median_4c, median_5c) + 0.02, 
-               f'N={len(comp_data)}\np={p_val:.3f}' if not np.isnan(p_val) else f'N={len(comp_data)}',
-               ha='center', va='bottom', fontsize=8,
-               bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8))
-        
-        x_pos += 1.5
+    bars = ax.bar(x_pos, delta_sorted, color=colors, alpha=0.7, edgecolor='white', linewidth=0.5)
     
-    if len(comparisons) > 0:
-        tick_positions = []
-        tick_labels = []
-        for i in range(len(comparisons)):
-            tick_positions.extend([i*1.5, i*1.5 + 0.8])
-            tick_labels.extend(['4c', '5c'])
-        ax.set_xticks(tick_positions)
-        ax.set_xticklabels(tick_labels)
-    ax.set_ylabel("Cohen's κ")
-    ax.set_title('Paired Subject Comparisons')
-    ax.legend(loc='upper left', fontsize=8)
+    # Horizontal line at 0
+    ax.axhline(y=0, color='black', linestyle='-', linewidth=1.5, alpha=0.8)
+    
+    # Add median line and CI
+    ax.axhline(y=med, color='black', linestyle='--', linewidth=2, alpha=0.9,
+               label=f'Median Δ = {med:+.3f}')
+    
+    # CI shading
+    ax.axhspan(ci[0], ci[1], alpha=0.15, color='gray', 
+               label=f'95% CI [{ci[0]:+.3f}, {ci[1]:+.3f}]')
+    
+    # Statistical annotation (concise)
+    metric_symbol = 'κ' if metric == 'test_kappa' else 'F1'
+    if not np.isnan(p_val):
+        stat_text = f'Paired Wilcoxon on {metric_symbol}: median Δ = {med:+.3f} (4c − 5c), 95% CI [{ci[0]:+.3f}, {ci[1]:+.3f}], p = {p_val:.3f}'
+        if not np.isnan(r_effect):
+            stat_text += f', r = {r_effect:.3f}'
+    else:
+        stat_text = f'{metric_symbol}: median Δ = {med:+.3f} (4c − 5c), 95% CI [{ci[0]:+.3f}, {ci[1]:+.3f}]'
+    
+    ax.text(0.02, 0.98, stat_text, transform=ax.transAxes, fontsize=10, 
+            ha='left', va='top', bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9))
+    
+    # Labels and title
+    metric_label = "Cohen's κ" if metric == 'test_kappa' else 'F1 Score'
+    ax.set_ylabel(f'Δ {metric_label} (4c − 5c)', fontweight='bold')
+    ax.set_xlabel('Subjects (sorted by Δ)', fontweight='bold')
+    ax.set_title(f'Performance Difference: 4-class vs 5-class\n(Values > 0 indicate 4c better)', 
+                fontsize=13, fontweight='bold')
+    
+    # Clean up x-axis (too many subject labels would be cluttered)
+    ax.set_xticks([])
+    
+    # Grid for readability
+    ax.grid(True, alpha=0.3, axis='y')
 
-def create_summary_table(df, is_paired=False):
-    """Create summary statistics table with paired analysis results."""
-    summary = []
+def plot_boxplot_comparison(df, metric, ax, stats_dict):
+    """Upper panel: Simple boxplot comparison with unobtrusive medians."""
+    configs = ['4-class-v1', '5-class']
+    positions = [0, 1]
     
-    for config in df['task_config'].unique():
+    # Prepare data
+    data_by_config = []
+    for config in configs:
         config_data = df[df['task_config'] == config]
-        
-        kappa_data = config_data['test_kappa'].dropna()
-        f1_data = config_data['test_f1'].dropna()
-        
-        summary.append({
-            'Configuration': config,
-            'N': len(config_data),
-            'Kappa_Median': np.median(kappa_data) if len(kappa_data) > 0 else np.nan,
-            'Kappa_IQR': np.percentile(kappa_data, [25, 75]) if len(kappa_data) > 0 else [np.nan, np.nan],
-            'F1_Median': np.median(f1_data) if len(f1_data) > 0 else np.nan,
-            'F1_IQR': np.percentile(f1_data, [25, 75]) if len(f1_data) > 0 else [np.nan, np.nan]
-        })
+        if len(config_data) > 0:
+            data_by_config.append(config_data[metric].dropna().values)
+        else:
+            data_by_config.append(np.array([]))
     
-    summary_df = pd.DataFrame(summary)
+    # Box plots
+    bp = ax.boxplot(data_by_config, positions=positions, patch_artist=True,
+                    widths=0.5, showfliers=True)
     
-    # Add paired analysis results if applicable
-    if is_paired:
-        delta_stats = paired_delta_ci(df, 'test_kappa', '4-class')
-        if delta_stats:
-            summary.append({
-                'Configuration': 'Paired Δ (5c-4c)',
-                'N': delta_stats['n_pairs'],
-                'Kappa_Median': delta_stats['med'],
-                'Kappa_IQR': delta_stats['ci'],
-                'F1_Median': np.nan,
-                'F1_IQR': [np.nan, np.nan]
-            })
-            summary_df = pd.DataFrame(summary)
+    # Color the boxes
+    colors_box = [COLORS['4-class-v1'], COLORS['5-class']]
+    for patch, color in zip(bp['boxes'], colors_box):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
     
-    return summary_df
+    # Add scatter points (jittered)
+    for i, (config, data) in enumerate(zip(configs, data_by_config)):
+        if len(data) > 0:
+            x_jitter = np.random.normal(i, 0.03, size=len(data))
+            ax.scatter(x_jitter, data, alpha=0.5, s=15, color=colors_box[i], edgecolors='white', linewidth=0.5)
+    
+    # Unobtrusive median labels (small gray tags)
+    for i, data in enumerate(data_by_config):
+        if len(data) > 0:
+            median_val = np.median(data)
+            ax.text(i, median_val, f'{median_val:.3f}', ha='center', va='center',
+                   fontsize=8, color='gray', fontweight='normal',
+                   bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.8, edgecolor='gray'))
+    
+    # Sample size annotations
+    for i, data in enumerate(data_by_config):
+        ax.text(i, ax.get_ylim()[1] * 0.98, f'N={len(data)}', 
+               ha='center', va='top', fontsize=9, fontweight='bold')
+    
+    # Labels
+    ax.set_xticks(positions)
+    ax.set_xticklabels(['4-class\n(Light=N1+N2)', '5-class\n(N1, N2 separate)'], fontsize=10)
+    metric_label = "Cohen's κ" if metric == 'test_kappa' else 'F1 Score'
+    ax.set_ylabel(metric_label, fontweight='bold')
+    ax.set_title('Performance Distribution by Task Granularity', fontsize=13, fontweight='bold')
+    
+    ax.grid(True, alpha=0.3, axis='y')
 
 def main():
-    parser = argparse.ArgumentParser(description='Task granularity analysis: 5-class vs 4-class variants')
+    parser = argparse.ArgumentParser(description='High-impact task granularity analysis')
     parser.add_argument('--csv', required=True, help='Path to CSV file')
-    parser.add_argument('--out', default='Plot_Clean/figures/fig5', help='Output directory')
-    parser.add_argument('--paired-only', action='store_true', 
-                       help='Restrict to subjects with both 5-class and 4-class configurations')
-    parser.add_argument('--four-class-variant', choices=['auto', 'v0', 'v1'], default='auto',
-                       help='Which 4-class variant to prefer for paired comparison')
+    parser.add_argument('--out', default='Plot_Clean/figures/', help='Output directory')
     args = parser.parse_args()
     
     # Setup
-    setup_style()
+    setup_figure_style()
     
     print(f"Loading data from {args.csv}...")
     df = pd.read_csv(args.csv)
@@ -442,9 +320,9 @@ def main():
     # Resolve columns
     df = resolve_columns(df)
     
-    # Filter to valid data
+    # Filter to valid data (focus on 4c-v1 vs 5c comparison)
     df = df.dropna(subset=['test_kappa', 'test_f1', 'num_classes', 'subject'])
-    df = df[df['num_classes'].isin([4, 5])]  # Only 4-class and 5-class
+    df = df[df['num_classes'].isin([4, 5])]
     print(f"After filtering: {len(df)} rows")
     
     # Create task configuration labels
@@ -456,99 +334,99 @@ def main():
     df_best = select_best_runs(df)
     print(f"\nAfter selecting best runs: {len(df_best)} rows")
     
-    # Apply paired filtering if requested
-    df_plot = df_best.copy()
-    if args.paired_only:
-        df_plot = filter_paired(df_best, prefer=args.four_class_variant)
-        print(f"After paired filtering: {len(df_plot)} rows")
-        if len(df_plot) == 0:
-            print("ERROR: No paired subjects found. Try without --paired-only flag.")
-            return
+    # Apply paired filtering (only subjects with both configs)
+    df_plot = filter_paired(df_best)
+    print(f"After paired filtering: {len(df_plot)} rows")
     
-    # Create figure
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    title_suffix = ' (Paired Subjects Only)' if args.paired_only else ''
-    fig.suptitle(f'Task Granularity Analysis: 5-class vs 4-class Sleep Staging{title_suffix}', 
-                fontsize=16, fontweight='bold')
+    if len(df_plot) == 0:
+        print("ERROR: No paired subjects found.")
+        return
     
-    # Panel 1: Kappa comparison
-    plot_performance_comparison(df_plot, 'test_kappa', axes[0,0], 
-                              "Cohen's κ by Task Configuration")
+    # Calculate paired statistics
+    kappa_stats = calculate_paired_stats(df_plot, 'test_kappa')
+    f1_stats = calculate_paired_stats(df_plot, 'test_f1')
     
-    # Panel 2: F1 comparison
-    plot_performance_comparison(df_plot, 'test_f1', axes[0,1], 
-                              'F1 Score by Task Configuration')
+    # Create figure - 2x2 layout but emphasize bottom row as main
+    fig = plt.figure(figsize=(14, 12))
     
-    # Panel 3: Paired comparison
-    plot_paired_comparison(df_plot, axes[1,0])
+    # Top row (smaller): boxplot comparisons
+    ax1 = plt.subplot2grid((3, 2), (0, 0))  # Kappa boxplot
+    ax2 = plt.subplot2grid((3, 2), (0, 1))  # F1 boxplot
     
-    # Panel 4: Summary statistics
-    axes[1,1].axis('off')  # Turn off axis for text table
+    # Bottom row (larger): main delta plots
+    ax3 = plt.subplot2grid((3, 2), (1, 0), rowspan=2)  # Kappa delta (main)
+    ax4 = plt.subplot2grid((3, 2), (1, 1), rowspan=2)  # F1 delta (main)
     
-    summary_df = create_summary_table(df_plot, is_paired=args.paired_only)
-    table_text = "Summary Statistics\n\n"
-    table_text += f"{'Config':<14} {'N':>3} {'κ Med':>7} {'κ Range':>14}\n"
-    table_text += "-" * 42 + "\n"
+    # Plot boxplots (upper panels)
+    plot_boxplot_comparison(df_plot, 'test_kappa', ax1, kappa_stats)
+    plot_boxplot_comparison(df_plot, 'test_f1', ax2, f1_stats)
     
-    for _, row in summary_df.iterrows():
-        config_name = row['Configuration']
-        if config_name == 'Paired Δ (5c-4c)':
-            # Special formatting for paired delta
-            ci_low, ci_high = row['Kappa_IQR']
-            range_str = f"[{ci_low:.3f},{ci_high:.3f}]"
-        else:
-            # Regular IQR formatting
-            if not np.any(np.isnan(row['Kappa_IQR'])):
-                range_str = f"[{row['Kappa_IQR'][0]:.3f}-{row['Kappa_IQR'][1]:.3f}]"
-            else:
-                range_str = "N/A"
+    # Plot main delta analysis (bottom panels - larger and emphasized)
+    plot_delta_main(df_plot, 'test_kappa', ax3, kappa_stats)
+    plot_delta_main(df_plot, 'test_f1', ax4, f1_stats)
+    
+    # Ensure identical y-limits within each metric across panels
+    if kappa_stats:
+        # Get combined y-range for kappa
+        y1_lim = ax1.get_ylim()
+        y3_lim = ax3.get_ylim()
+        combined_y_min = min(y1_lim[0], y3_lim[0])
+        combined_y_max = max(y1_lim[1], y3_lim[1])
+        ax1.set_ylim(combined_y_min, combined_y_max)
         
-        table_text += f"{config_name:<14} {row['N']:>3} {row['Kappa_Median']:>7.3f} {range_str:>14}\n"
+        # Delta plot needs different scaling centered on 0
+        delta_range = max(abs(kappa_stats['delta'].min()), abs(kappa_stats['delta'].max()))
+        ax3.set_ylim(-delta_range * 1.2, delta_range * 1.2)
     
-    # Add statistical test summary if paired
-    if args.paired_only:
-        delta_stats = paired_delta_ci(df_plot, 'test_kappa', '4-class')
-        if delta_stats:
-            table_text += "\nPaired Tests:\n"
-            table_text += f"Two-sided p = {delta_stats['p_two']:.4f}\n"
-            table_text += f"5c > 4c p = {delta_stats['p_greater']:.4f}\n"
+    if f1_stats:
+        # Get combined y-range for F1
+        y2_lim = ax2.get_ylim()
+        y4_lim = ax4.get_ylim()
+        combined_y_min = min(y2_lim[0], y4_lim[0])
+        combined_y_max = max(y2_lim[1], y4_lim[1])
+        ax2.set_ylim(combined_y_min, combined_y_max)
+        
+        # Delta plot needs different scaling centered on 0
+        delta_range = max(abs(f1_stats['delta'].min()), abs(f1_stats['delta'].max()))
+        ax4.set_ylim(-delta_range * 1.2, delta_range * 1.2)
     
-    axes[1,1].text(0.05, 0.95, table_text, transform=axes[1,1].transAxes, 
-                   fontsize=9, fontfamily='monospace', va='top')
+    # Main title with mapping clarity
+    fig.suptitle('Task Granularity Impact on Sleep Staging Performance\n' +
+                 '4-class merges Light Sleep (N1+N2) vs 5-class keeps N1, N2 separate', 
+                 fontsize=16, fontweight='bold', y=0.95)
     
     plt.tight_layout()
+    plt.subplots_adjust(top=0.88)  # Make room for title
     
     # Save outputs
     output_dir = Path(args.out)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save figure
-    suffix = '_paired' if args.paired_only else ''
-    fig_path = output_dir / f'fig_task_granularity{suffix}.svg'
-    plt.savefig(fig_path, dpi=300, bbox_inches='tight')
-    print(f"\nFigure saved: {fig_path}")
+    # Save figure using consistent save function
+    fig_path = output_dir / 'fig_task_granularity_v2'
+    saved_files = save_figure(fig, fig_path)
     
-    # Save summary
-    summary_path = output_dir / 'task_granularity_summary.csv'
-    summary_df.to_csv(summary_path, index=False)
-    print(f"Summary saved: {summary_path}")
+    # Print N information for caption
+    if kappa_stats:
+        n_subjects = kappa_stats['n_pairs']
+        n_runs = len(df_plot)
+        print(f"\n📋 Caption info: {format_n_caption(n_subjects, n_runs, 'subjects')}")
     
     # Print key results
-    if args.paired_only:
-        delta_stats = paired_delta_ci(df_plot, 'test_kappa', '4-class')
-        if delta_stats:
-            print(f"\n=== PAIRED COMPARISON RESULTS ===")
-            print(f"N paired subjects: {delta_stats['n_pairs']}")
-            print(f"Median Δ (5c - 4c): {delta_stats['med']:+.4f}")
-            print(f"95% CI: [{delta_stats['ci'][0]:.4f}, {delta_stats['ci'][1]:.4f}]")
-            print(f"Two-sided p-value: {delta_stats['p_two']:.4f}")
-            print(f"5c > 4c p-value: {delta_stats['p_greater']:.4f}")
-            
-            if delta_stats['p_two'] < 0.05:
-                direction = "better" if delta_stats['med'] > 0 else "worse"
-                print(f"\n*** SIGNIFICANT: 5-class performs {direction} than 4-class ***")
-            else:
-                print(f"\n*** NO SIGNIFICANT DIFFERENCE between 5-class and 4-class ***")
+    if kappa_stats:
+        print(f"\n=== KEY RESULTS (Cohen's κ) ===")
+        print(f"N paired subjects: {kappa_stats['n_pairs']}")
+        print(f"Median Δ (4c - 5c): {kappa_stats['med']:+.4f}")
+        print(f"95% CI: [{kappa_stats['ci'][0]:+.4f}, {kappa_stats['ci'][1]:+.4f}]")
+        print(f"Two-sided p-value: {kappa_stats['p_two']:.4f}")
+        if not np.isnan(kappa_stats['effect_size']):
+            print(f"Effect size (r): {kappa_stats['effect_size']:.3f}")
+        
+        if kappa_stats['p_two'] < 0.05:
+            direction = "BETTER" if kappa_stats['med'] > 0 else "WORSE"
+            print(f"\n*** SIGNIFICANT: 4-class performs {direction} than 5-class ***")
+        else:
+            print(f"\n*** NO SIGNIFICANT DIFFERENCE between 4-class and 5-class ***")
     
     plt.show()
 

@@ -1078,7 +1078,7 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
     
     # Save
     output_dir.mkdir(parents=True, exist_ok=True)
-    fig_svg = output_dir / 'figure_4_subjects_vs_minutes.svg'
+    fig_svg = output_dir / 'figure_4_subjects_vs_minutes.png'
     plt.savefig(fig_svg)
     print(f"\nSaved: {fig_svg}")
     
