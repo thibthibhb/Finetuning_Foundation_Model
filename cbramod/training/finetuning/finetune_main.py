@@ -1,10 +1,12 @@
 import sys
 import argparse
 import random
+import csv
+import os
+from pathlib import Path
 
 import numpy as np
 import torch
-import os
 # Add the root directory to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "../../.."))
@@ -14,6 +16,16 @@ try:
     from .finetune_trainer import Trainer
 except ImportError:
     from finetune_trainer import Trainer
+
+# ICL imports
+try:
+    from ..icl_data import make_episodic_loaders
+    from ..icl_trainer import ICLTrainer
+except ImportError:
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from icl_data import make_episodic_loaders
+    from icl_trainer import ICLTrainer
 from cbramod.models import model_for_idun
 import pdb
 from statistics import mean, stdev
@@ -25,6 +37,59 @@ except ImportError:
     from finetune_tuner import run_optuna_tuning
 
       
+def _maybe_init_wandb(params, mode_name: str, extra_tags=None):
+    """Initialize WandB logging if enabled."""
+    from cbramod.training.finetuning.finetune_trainer import wandb
+    
+    if params.no_wandb or wandb is None:
+        print("📊 WandB logging disabled")
+        return None
+    
+    # Build tags
+    tags = getattr(params, 'label_space_tags', [])
+    tags.append(f'method:{mode_name}')
+    if hasattr(params, 'icl_k') and params.icl_mode != 'off':
+        tags.extend([f'K:{params.icl_k}', f'M:{params.icl_m}'])
+    if extra_tags:
+        tags.extend(extra_tags)
+    
+    # Build run name
+    run_name = params.run_name
+    if mode_name != 'finetune':
+        run_name += f'-{mode_name}-K{params.icl_k}'
+    
+    try:
+        wandb_run = wandb.init(
+            project=params.wandb_project,
+            entity=params.wandb_entity,
+            group=params.wandb_group,
+            name=run_name,
+            tags=tags,
+            mode='offline' if params.wandb_offline else 'online',
+            config=vars(params),
+            reinit=True
+        )
+        print(f"📊 WandB initialized: {wandb_run.name}")
+        return wandb_run
+    except Exception as e:
+        print(f"⚠️ WandB init failed: {e}")
+        return None
+
+def _append_results_csv(csv_path: str, row_dict: dict):
+    """Append results to CSV file."""
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    
+    file_exists = os.path.exists(csv_path)
+    with open(csv_path, 'a', newline='') as f:
+        fieldnames = ['mode', 'K', 'M', 'num_classes', 'label_map', 'kappa', 'acc', 'macro_f1', 'run_name', 'comment']
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row_dict)
+    
+    print(f"📝 Results appended to {csv_path}")
+
 def main(return_params=False):
     parser = argparse.ArgumentParser(description='Big model downstream')
     
@@ -124,7 +189,7 @@ def main(return_params=False):
     
     # === Noise Injection for Robustness Analysis ===
     parser.add_argument('--noise_level', type=float, default=0.0, 
-                        help='Noise injection level (0.0=no noise, 0.05=5%, 0.10=10%, 0.20=20%)')
+                        help='Noise injection level (0.0=no noise, 0.05=5pct, 0.10=10pct, 0.20=20pct)')
     parser.add_argument('--noise_type', type=str, default='realistic', 
                         choices=['gaussian', 'emg', 'movement', 'electrode', 'realistic'],
                         help='Type of noise to inject: gaussian, emg (muscle), movement, electrode (impedance), realistic (mixed)')
@@ -166,7 +231,7 @@ def main(return_params=False):
                         help='Disable WandB logging entirely')
     
     # === Results CSV Export ===
-    parser.add_argument('--results_csv', type=str, default='./experiments/results/summary.csv',
+    parser.add_argument('--results_csv', type=str, default='./Plot_Clean/data_full/summary.csv',
                         help='Path to CSV file for appending results')
 
     params = parser.parse_args()
@@ -255,11 +320,93 @@ def main(return_params=False):
         }
 
         model = model_for_idun.Model(params)
-        trainer = Trainer(params, data_loader, model)
+        
+        # ICL mode branching
+        if params.icl_mode != 'off':
+            print(f"\n🧠 ICL Mode: {params.icl_mode} (K={params.icl_k}, M={params.icl_m})")
+            
+            # Create episodic dataloaders
+            train_ep_loader, val_ep_loader, test_ep_loader = make_episodic_loaders(
+                dataset, train_idx, val_idx, test_idx,
+                k=params.icl_k, m=params.icl_m,
+                balance_support=params.icl_balance_support,
+                batch_episodes=4, num_workers=params.num_workers
+            )
+            
+            # Create ICL trainer
+            icl_trainer = ICLTrainer(
+                params, model, params.num_of_classes,
+                proj_dim=params.icl_proj_dim,
+                cosine=params.icl_cosine
+            )
+            
+            # Train if meta_proto mode
+            if params.icl_mode == 'meta_proto':
+                icl_trainer.fit(train_ep_loader, val_ep_loader, params.epochs)
+            
+            # Evaluate
+            results = icl_trainer.evaluate(test_ep_loader)
+            kappa, acc, f1 = results['kappa'], results['acc'], results['macro_f1']
+            
+            # Log to WandB
+            wandb_run = _maybe_init_wandb(params, params.icl_mode)
+            if wandb_run:
+                from cbramod.training.finetuning.finetune_trainer import wandb as wb
+                wb.log({
+                    'test/kappa': kappa,
+                    'test/acc': acc,
+                    'test/macro_f1': f1
+                })
+                wb.finish()
+            
+            # Append to CSV
+            csv_row = {
+                'mode': params.icl_mode,
+                'K': params.icl_k,
+                'M': params.icl_m,
+                'num_classes': params.num_of_classes,
+                'label_map': params.label_mapping_version,
+                'kappa': kappa,
+                'acc': acc,
+                'macro_f1': f1,
+                'run_name': params.run_name,
+                'comment': getattr(params, 'comment', '')
+            }
+            _append_results_csv(params.results_csv, csv_row)
+            
+        else:
+            # Fine-tuning path
+            trainer = Trainer(params, data_loader, model)
 
-        print(f"🚀 Training model on fixed split")
-        kappa = trainer.train_for_multiclass()
-        acc, _, f1, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(model)
+            print(f"🚀 Training model on fixed split")
+            kappa = trainer.train_for_multiclass()
+            acc, _, f1, _, _, _ = trainer.test_eval.get_metrics_for_multiclass(model)
+            
+            # Log to WandB
+            wandb_run = _maybe_init_wandb(params, 'finetune')
+            if wandb_run:
+                from cbramod.training.finetuning.finetune_trainer import wandb as wb
+                wb.log({
+                    'test/kappa': kappa,
+                    'test/acc': acc,
+                    'test/macro_f1': f1
+                })
+                wb.finish()
+            
+            # Append to CSV
+            csv_row = {
+                'mode': 'finetune',
+                'K': None,
+                'M': None,
+                'num_classes': params.num_of_classes,
+                'label_map': params.label_mapping_version,
+                'kappa': kappa,
+                'acc': acc,
+                'macro_f1': f1,
+                'run_name': params.run_name,
+                'comment': getattr(params, 'comment', '')
+            }
+            _append_results_csv(params.results_csv, csv_row)
 
         print("\n📊 Evaluation Results:")
         print(f"  Kappa: {kappa:.4f}")

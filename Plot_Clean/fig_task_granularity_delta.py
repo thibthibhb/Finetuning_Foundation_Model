@@ -13,17 +13,11 @@ from typing import Tuple, Dict, Any
 import warnings
 warnings.filterwarnings('ignore')
 
-# Set consistent matplotlib styling
-plt.rcParams.update({
-    'font.family': 'DejaVu Sans',
-    'font.size': 12,
-    'axes.titlesize': 14,
-    'axes.labelsize': 12,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'figure.titlesize': 14,
-    'figure.dpi': 300
-})
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    bootstrap_ci_median, wilcoxon_test
+)
 
 def load_and_pair(csv_path: str) -> pd.DataFrame:
     """

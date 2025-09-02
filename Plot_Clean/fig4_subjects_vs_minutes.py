@@ -44,70 +44,34 @@ except ImportError:
 
 warnings.filterwarnings("ignore")
 
-# Colorblind-friendly palette (Okabe–Ito)
-OKABE_ITO = {
-    "blue": "#0072B2",
-    "orange": "#E69F00", 
-    "green": "#009E73",
-    "vermillion": "#D55E00",
-    "purple": "#CC79A7",
-    "sky": "#56B4E9",
-    "yellow": "#F0E442",
-    "black": "#000000",
-}
-
-CB_COLORS = {
-    "cbramod": OKABE_ITO["blue"],      # teal/blue for CBraMod
-    "yasa": OKABE_ITO["orange"],       # warm orange for YASA
-}
-
-def setup_plotting_style():
-    """Configure matplotlib for publication-ready plots."""
-    plt.style.use("default")
-    plt.rcParams.update({
-        "figure.figsize": (16, 10),
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "DejaVu Sans"],
-        "font.size": 12,
-        "axes.titlesize": 16,
-        "axes.labelsize": 14,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 11,
-        "figure.dpi": 120,
-        "savefig.dpi": 300,
-        "savefig.bbox": "tight",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "grid.alpha": 0.3,
-        "axes.axisbelow": True,
-        "axes.prop_cycle": cycler(color=list(OKABE_ITO.values())),
-        # Key for overlap management:
-        "figure.constrained_layout.use": True,
-    })
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    add_yasa_baseline, add_significance_marker,
+    bootstrap_ci_median, wilcoxon_test,
+    format_n_caption, add_sample_size_annotation,
+    OKABE_ITO
+)
 
 
-def bootstrap_ci_median(arr: np.ndarray, confidence: float = 0.95) -> tuple:
-    """Calculate bootstrap CI for median."""
-    if len(arr) < 3:
-        return np.nan, np.nan
-    
-    try:
-        def median_stat(x):
-            return np.median(x)
-        
-        rng = np.random.default_rng(42)
-        res = bootstrap((arr,), median_stat, n_resamples=1000, 
-                       confidence_level=confidence, random_state=rng)
-        return res.confidence_interval.low, res.confidence_interval.high
-    except:
-        return np.nan, np.nan
+# Remove duplicate bootstrap_ci_median function - using the one from figure_style.py
 
 def load_and_prepare_data(csv_path: Path) -> pd.DataFrame:
     """Load CSV data and calculate minutes per subject."""
     df = pd.read_csv(csv_path)
     print(f"Loaded CSV with {len(df)} rows")
+    
+    # CRITICAL: Filter out high noise experiments to avoid bias
+    if 'noise_level' in df.columns:
+        noise_stats = df['noise_level'].value_counts().sort_index()
+        print(f"🔊 Noise level distribution: {dict(noise_stats)}")
+        
+        # Keep only clean data (noise_level <= 0.01 or 1%) 
+        df = df[df['noise_level'] <= 0.01].copy()
+        print(f"✅ Filtered to clean data: {len(df)} rows remaining (noise ≤ 1%)")
+        
+        if len(df) == 0:
+            raise ValueError("No clean data found after noise filtering.")
     
     # Create convenience aliases
     if "test_kappa" not in df.columns:
@@ -781,7 +745,7 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
     gs = fig.add_gridspec(4, 2, height_ratios=[1.2, 1, 1, 0.15])
 
     fig.suptitle(
-        'Figure 4: Subjects vs Minutes per Subject - What Matters More?\n'
+        'Subjects vs Minutes per Subject - What Matters More?\n'
         'Analysis of Calibration Data Distribution Strategy',
         fontweight='bold', fontsize=16
     )
@@ -813,11 +777,26 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
             rasterized=True
         )
 
-        # Ticks: rotate x, make y nice integers
+        # Reduce x-axis tick density for cleaner appearance
         ax_main.set_xlabel('Minutes per Subject', fontweight='bold')
         ax_main.set_ylabel('Number of Subjects', fontweight='bold')
         ax_main.set_title('A: Performance Heatmap - Subjects vs Minutes per Subject', fontweight='bold', pad=10)
-        ax_main.set_xticklabels(ax_main.get_xticklabels(), rotation=35, ha='right')
+        
+        # Show fewer x-axis labels for cleaner look
+        x_ticks = ax_main.get_xticks()
+        if len(x_ticks) > 8:  # If more than 8 ticks, reduce them
+            # Show every other tick or every 3rd tick depending on density
+            step = max(2, len(x_ticks) // 6)  # Show ~6 labels maximum
+            keep_indices = range(0, len(x_ticks), step)
+            x_labels = ax_main.get_xticklabels()
+            
+            new_ticks = [x_ticks[i] for i in keep_indices]
+            new_labels = [x_labels[i].get_text() for i in keep_indices]
+            
+            ax_main.set_xticks(new_ticks)
+            ax_main.set_xticklabels(new_labels, rotation=35, ha='right')
+        else:
+            ax_main.set_xticklabels(ax_main.get_xticklabels(), rotation=35, ha='right')
 
         # If subjects are nearly integers, force as int labels
         yticklabs = []
@@ -835,9 +814,9 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
                 X, Y = np.meshgrid(pivot_data.columns.astype(float), pivot_data.index.astype(float))
                 mask = np.isfinite(Z)
                 if mask.sum() >= 9:
-                    ax_main.contour(X, Y, Z, levels=[0], colors=[OKABE_ITO['vermillion']], linestyles='--', linewidths=2)
+                    ax_main.contour(X, Y, Z, levels=[0], colors=[get_color('yasa')], linestyles='--', linewidths=2)
                     if np.nanmax(Z) > delta_threshold:
-                        ax_main.contour(X, Y, Z, levels=[delta_threshold], colors=[OKABE_ITO['green']], linestyles='-', linewidths=2.5)
+                        ax_main.contour(X, Y, Z, levels=[delta_threshold], colors=[get_color('t_star')], linestyles='-', linewidths=2.5)
             except Exception:
                 pass
 
@@ -850,15 +829,15 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
                 # Remove NaN for contouring
                 mask = ~np.isnan(Z)
                 if mask.sum() > 4:  # Need at least some valid points
-                    # Δκ = 0 (tie with YASA) - vermillion  
+                    # Δκ = 0 (tie with YASA) - orange  
                     contour_zero = ax_main.contour(X, Y, Z, levels=[0], 
-                                                 colors=[OKABE_ITO['vermillion']], 
+                                                 colors=[get_color('yasa')], 
                                                  linestyles='--', linewidths=2)
                     
                     # Δκ = threshold (target) - green
                     if np.nanmax(Z) > delta_threshold:
                         contour_target = ax_main.contour(X, Y, Z, levels=[delta_threshold], 
-                                                       colors=[OKABE_ITO['green']], 
+                                                       colors=[get_color('t_star')], 
                                                        linestyles='-', linewidths=3)
             except:
                 print("Could not add contour lines to heatmap")
@@ -882,7 +861,7 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
         scatter = ax1.scatter(
             df_total_hours['total_hours'],
             df_total_hours['delta_kappa'] + jitter,
-            c=CB_COLORS['cbramod'],
+            c=get_color('cbramod'),
             s=40, alpha=0.7,  # Smaller points for bin tops
             edgecolors='black', linewidth=0.5,
             label='Top 3 per 100h bin'
@@ -900,9 +879,9 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
         )
 
     # YASA baseline as simple horizontal line
-    ax1.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+    ax1.axhline(y=0, color=get_color('yasa'), linestyle='--', linewidth=1.8, 
                label='YASA baseline (Δκ=0)', zorder=2)
-    ax1.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
+    ax1.axhline(y=delta_threshold, color=get_color('t_star'), linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
 
     ax1.set_xlabel('Total Hours of Data', fontweight='bold')
     ax1.set_ylabel('Δκ vs YASA', fontweight='bold')
@@ -925,7 +904,7 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
         ax2.scatter(
             df_minutes['minutes_per_subject'],
             df_minutes['delta_kappa'] + jitter,
-            c=CB_COLORS['cbramod'],
+            c=get_color('cbramod'),
             s=40, alpha=0.7,  # Smaller points for bin tops
             edgecolors='black', linewidth=0.5,
             label='Top 3 per 100min bin'
@@ -941,9 +920,9 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
         )
 
     # YASA baseline as simple horizontal line
-    ax2.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+    ax2.axhline(y=0, color=get_color('yasa'), linestyle='--', linewidth=1.8, 
                label='YASA baseline (Δκ=0)', zorder=2)
-    ax2.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
+    ax2.axhline(y=delta_threshold, color=get_color('t_star'), linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
 
     ax2.set_xlabel('Minutes per Subject', fontweight='bold')
     ax2.set_ylabel('Δκ vs YASA', fontweight='bold')
@@ -966,7 +945,7 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
         ax3.scatter(
             df_subjects['num_subjects'],
             df_subjects['delta_kappa'] + jitter,
-            c=CB_COLORS['cbramod'],
+            c=get_color('cbramod'),
             s=40, alpha=0.7,  # Smaller points for bin tops
             edgecolors='black', linewidth=0.5,
             label='Top 3 per 3-subject bin'
@@ -982,9 +961,9 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
         )
 
     # YASA baseline as simple horizontal line
-    ax3.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+    ax3.axhline(y=0, color=get_color('yasa'), linestyle='--', linewidth=1.8, 
                label='YASA baseline (Δκ=0)', zorder=2)
-    ax3.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
+    ax3.axhline(y=delta_threshold, color=get_color('t_star'), linestyle='-', linewidth=1.8, label=f'Target (+{delta_threshold})')
 
     ax3.set_xlabel('Number of Subjects', fontweight='bold')
     ax3.set_ylabel('Δκ vs YASA', fontweight='bold')
@@ -1026,14 +1005,14 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
 
                 # Use consistent CBraMod color for all boxes
                 for patch in bp['boxes']:
-                    patch.set_facecolor(CB_COLORS['cbramod'])
+                    patch.set_facecolor(get_color('cbramod'))
                     patch.set_alpha(0.7)
                     patch.set_edgecolor('black')
 
                 # YASA baseline as simple horizontal line
-                ax4.axhline(y=0, color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, 
+                ax4.axhline(y=0, color=get_color('yasa'), linestyle='--', linewidth=1.8, 
                            label='YASA baseline (Δκ=0)', zorder=2)
-                ax4.axhline(y=delta_threshold, color=OKABE_ITO['green'], linestyle='-', linewidth=1.8)
+                ax4.axhline(y=delta_threshold, color=get_color('t_star'), linestyle='-', linewidth=1.8)
 
                 ax4.set_xlabel('Number of Subjects', fontweight='bold')
                 ax4.set_ylabel('Δκ vs YASA', fontweight='bold')
@@ -1060,8 +1039,8 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
                markeredgecolor='darkred', markeredgewidth=2, label=f'Top performer (Δκ={top_performer["delta_kappa"]:.3f})'),
         Line2D([0], [0], marker='o', color='gray', linestyle='None', markersize=8, 
                markeredgecolor='black', markeredgewidth=0.5, label='Top 3 per bin'),
-        Line2D([0], [0], color=CB_COLORS['yasa'], linestyle='--', linewidth=1.8, label='YASA baseline (Δκ=0)'),
-        Line2D([0], [0], color=OKABE_ITO['green'], linestyle='-', linewidth=1.8, label=f'Target improvement (+{delta_threshold})'),
+        Line2D([0], [0], color=get_color('yasa'), linestyle='--', linewidth=1.8, label='YASA baseline (Δκ=0)'),
+        Line2D([0], [0], color=get_color('t_star'), linestyle='-', linewidth=1.8, label=f'Target improvement (+{delta_threshold})'),
     ]
 
     
@@ -1076,11 +1055,10 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
     
     #plt.tight_layout()
     
-    # Save
+    # Save using consistent save function
     output_dir.mkdir(parents=True, exist_ok=True)
-    fig_svg = output_dir / 'figure_4_subjects_vs_minutes.png'
-    plt.savefig(fig_svg)
-    print(f"\nSaved: {fig_svg}")
+    base_path = output_dir / 'figure_4_subjects_vs_minutes'
+    save_figure(fig, base_path)
     
     # Analysis summary
     print(f"\nSubjects vs Minutes Analysis Summary (Top Performers Only):")
@@ -1200,13 +1178,13 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
 
 def main():
     """Main execution function."""
-    parser = argparse.ArgumentParser(description='Generate Figure 4: Subjects vs Minutes Analysis')
+    parser = argparse.ArgumentParser(description='Subjects vs Minutes Analysis')
     parser.add_argument("--csv", required=True, help="Path to flattened CSV")
     parser.add_argument("--out", default="Plot_Clean/figures/fig4", help="Output directory")
     parser.add_argument("--test", action="store_true", help="Run comprehensive testing suite")
     args = parser.parse_args()
 
-    setup_plotting_style()
+    setup_figure_style()
     
     # Load and prepare data
     df = load_and_prepare_data(Path(args.csv))

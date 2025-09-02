@@ -34,50 +34,26 @@ from scipy import stats
 
 warnings.filterwarnings("ignore")
 
-# Okabe–Ito colorblind-friendly palette
-OKABE_ITO = [
-    "#0072B2",  # blue
-    "#E69F00",  # orange
-    "#009E73",  # green
-    "#D55E00",  # vermillion
-    "#CC79A7",  # reddish purple
-    "#56B4E9",  # sky blue
-    "#F0E442",  # yellow
-    "#000000",  # black
-]
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    bootstrap_ci_median, wilcoxon_test,
+    OKABE_ITO
+)
 
-# Named roles for key elements
+# Named roles for key elements using consistent colors
 CB_COLORS = {
-    "frozen": "#E69F00",      # orange - for frozen backbone
-    "unfrozen": "#0072B2",    # blue - for unfrozen backbone
-    "significance": "#009E73", # green - for significance indicators
+    "frozen": get_color("yasa"),      # orange - for frozen backbone
+    "unfrozen": get_color("cbramod"), # blue - for unfrozen backbone
+    "significance": get_color("t_star"), # green - for significance indicators
 }
 
 
 def setup_plotting_style():
-    plt.style.use("default")
-    plt.rcParams.update({
-        "figure.figsize": (10, 8),
-        "font.family": "sans-serif",
-        "font.sans-serif": ["Arial", "DejaVu Sans"],
-        "font.size": 12,
-        "axes.titlesize": 15,
-        "axes.labelsize": 13,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
-        "legend.fontsize": 11,
-        "figure.dpi": 120,
-        "savefig.dpi": 300,
-        "savefig.bbox": "tight",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "grid.alpha": 0.25,
-        "axes.prop_cycle": plt.cycler(color=OKABE_ITO),
-    })
+    setup_figure_style()
 
 
-def bootstrap_ci_median(arr: np.ndarray, confidence: float = 0.95) -> Tuple[float, float]:
+# Remove duplicate bootstrap_ci_median function - using the one from figure_style.py
     arr = np.asarray(arr, dtype=float)
     arr = arr[~np.isnan(arr)]
     if arr.size < 3:

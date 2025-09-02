@@ -90,6 +90,18 @@ def load_and_prepare_data(csv_path: Path) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     print(f"Loaded CSV with {len(df)} rows")
     
+    # CRITICAL: Filter out high noise experiments to avoid bias
+    if 'noise_level' in df.columns:
+        noise_stats = df['noise_level'].value_counts().sort_index()
+        print(f"🔊 Noise level distribution: {dict(noise_stats)}")
+        
+        # Keep only clean data (noise_level <= 0.01 or 1%) 
+        df = df[df['noise_level'] <= 0.01].copy()
+        print(f"✅ Filtered to clean data: {len(df)} rows remaining (noise ≤ 1%)")
+        
+        if len(df) == 0:
+            raise ValueError("No clean data found after noise filtering.")
+    
     # Create convenience aliases
     if "test_f1" not in df.columns:
         if "contract.results.test_f1" in df.columns:
@@ -251,12 +263,12 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, num_subjects: int, output_d
     # Add YASA overall F1 as dashed horizontal line
     overall_yasa_f1 = np.mean(list(yasa_f1.values()))  # Calculate overall YASA F1
     yasa_line = ax.axhline(y=overall_yasa_f1, color=get_color("yasa"), linestyle='--', 
-                          alpha=0.8, linewidth=1.0, label=f"Overall YASA (F1) ±95% CI")
+                          alpha=0.8, linewidth=1.0, label=f"Overall YASA (F1)")
     
     # Add CBraMod overall F1 as dashed horizontal line
     overall_cbramod_f1 = np.mean(list(cbramod_f1.values()))  # Calculate overall CBraMod F1
     cbramod_line = ax.axhline(y=overall_cbramod_f1, color=get_color("cbramod"), linestyle='--', 
-                             alpha=0.8, linewidth=1.0, label=f"Overall CBraMod (F1) ±95% CI")
+                             alpha=0.8, linewidth=1.0, label=f"Overall CBraMod (F1)")
     
     # Calculate significance and add brackets spanning pairs
     for i, (stage, delta) in enumerate(zip(stages, deltas)):
@@ -269,7 +281,7 @@ def create_figure_3(yasa_f1: dict, cbramod_f1: dict, num_subjects: int, output_d
             significant_threshold = 0.15
         else:  # Easier stages (Wake, N2, REM)
             significant_threshold = 0.08
-        
+         
         if delta > significant_threshold:
             # Add bracket spanning the pair
             bracket_height = max(yasa_baselines[i], cbramod_scores[i]) + 0.08

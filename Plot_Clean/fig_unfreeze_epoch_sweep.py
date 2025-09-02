@@ -26,51 +26,32 @@ from scipy.stats import bootstrap
 
 warnings.filterwarnings("ignore")
 
-# Okabe–Ito colorblind-friendly palette
-OKABE_ITO = [
-    "#0072B2",  # blue
-    "#E69F00",  # orange  
-    "#009E73",  # green
-    "#D55E00",  # vermillion
-    "#CC79A7",  # reddish purple
-    "#56B4E9",  # sky blue
-    "#F0E442",  # yellow
-    "#000000",  # black
-]
+# Import consistent figure styling
+from figure_style import (
+    setup_figure_style, get_color, save_figure, 
+    bootstrap_ci_median, wilcoxon_test,
+    OKABE_ITO
+)
 
-# Color mapping for unfreeze epochs
+# Color mapping for unfreeze epochs using consistent colors
 EPOCH_COLORS = {
-    0: "#E69F00",    # orange - always frozen
-    1: "#0072B2",    # blue - unfreeze epoch 1
-    3: "#009E73",    # green - unfreeze epoch 3  
-    5: "#D55E00",    # vermillion - unfreeze epoch 5
-    10: "#CC79A7",   # purple - unfreeze epoch 10
+    0: OKABE_ITO[1],  # orange - always frozen
+    1: OKABE_ITO[0],  # blue - unfreeze epoch 1
+    3: OKABE_ITO[2],  # green - unfreeze epoch 3  
+    5: OKABE_ITO[3],  # vermillion - unfreeze epoch 5
+    10: OKABE_ITO[4], # purple - unfreeze epoch 10
 }
 
 def setup_plotting_style():
     """Configure matplotlib for publication-ready plots."""
-    plt.style.use("default")
+    setup_figure_style()
+    # Override figure size for this specific plot
     plt.rcParams.update({
         "figure.figsize": (15, 5),
-        "font.family": "sans-serif", 
-        "font.sans-serif": ["Arial", "DejaVu Sans"],
-        "font.size": 11,
-        "axes.titlesize": 13,
-        "axes.labelsize": 12,
-        "xtick.labelsize": 10,
-        "ytick.labelsize": 10,
-        "legend.fontsize": 10,
-        "figure.dpi": 120,
-        "savefig.dpi": 300,
-        "savefig.bbox": "tight",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "grid.alpha": 0.3,
         "axes.axisbelow": True,
     })
 
-def bootstrap_ci_median(arr: np.ndarray, confidence: float = 0.95) -> Tuple[float, float]:
+# Remove duplicate bootstrap_ci_median function - using the one from figure_style.py
     """Calculate bootstrap confidence interval for median."""
     arr = np.asarray(arr, dtype=float)
     arr = arr[~np.isnan(arr)]

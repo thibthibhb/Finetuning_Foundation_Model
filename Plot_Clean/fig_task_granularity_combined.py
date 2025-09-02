@@ -50,6 +50,20 @@ def load_data(csv_path: str) -> pd.DataFrame:
     except FileNotFoundError:
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
     
+    print(f"Loaded CSV with {len(df)} rows")
+    
+    # CRITICAL: Filter out high noise experiments to avoid bias
+    if 'noise_level' in df.columns:
+        noise_stats = df['noise_level'].value_counts().sort_index()
+        print(f"🔊 Noise level distribution: {dict(noise_stats)}")
+        
+        # Keep only clean data (noise_level <= 0.01 or 1%) 
+        df = df[df['noise_level'] <= 0.01].copy()
+        print(f"✅ Filtered to clean data: {len(df)} rows remaining (noise ≤ 1%)")
+        
+        if len(df) == 0:
+            raise ValueError("No clean data found after noise filtering.")
+    
     # Map actual column names to expected ones (reusing delta script logic)
     actual_cols = {
         'subject_id': 'cfg.subject_id',
@@ -255,9 +269,9 @@ def plot_deltas(ax, df: pd.DataFrame, metric: str, palette: Dict[str, str]) -> N
     median_val = np.median(deltas.values)
     ci_low, ci_high = bootstrap_ci_median(deltas.values)
     
-    # Add median line and CI band
-    ax.axhline(median_val, color='black', linestyle='--', linewidth=1.5, alpha=0.8)
-    ax.axhspan(ci_low, ci_high, alpha=0.2, color='gray')
+    # # Add median line and CI band
+    # ax.axhline(median_val, color='black', linestyle='--', linewidth=1.5, alpha=0.8)
+    # ax.axhspan(ci_low, ci_high, alpha=0.2, color='gray')
     
     # Statistical test using consistent function
     p_val = wilcoxon_test(deltas.values)
@@ -351,8 +365,8 @@ def main():
     fig.suptitle(title_text, fontsize=14, fontweight='bold')
     
     # Add footnote for delta plots
-    fig.text(0.5, 0.02, 'Per-subject paired differences (4c–5c). Line/band: median and bootstrap 95% CI.',
-             ha='center', va='bottom', fontsize=9, style='italic')
+    # fig.text(0.5, 0.02, 'Per-subject paired differences (4c–5c). Line/band: median and bootstrap 95% CI.',
+    #          ha='center', va='bottom', fontsize=9, style='italic')
     
     # Save figures
     output_dir = Path(args.out)

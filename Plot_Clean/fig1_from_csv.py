@@ -122,6 +122,21 @@ def load_and_prepare(csv_path: Path, x_mode: str, num_subjects: Optional[int] = 
     
     print(f"Available columns: {list(df.columns)}")
     
+    # CRITICAL: Filter out high noise experiments to avoid bias (except for dedicated robustness plots)
+    if 'noise_level' in df.columns:
+        # Get noise statistics before filtering
+        noise_stats = df['noise_level'].value_counts().sort_index()
+        print(f"🔊 Noise level distribution before filtering: {dict(noise_stats)}")
+        
+        # Keep only clean data (noise_level <= 0.01 or 1%) to avoid bias in calibration analysis
+        df = df[df['noise_level'] <= 0.01].copy()
+        print(f"✅ Filtered to clean/low-noise data only: {len(df)} rows remaining (noise ≤ 1%)")
+        
+        if len(df) == 0:
+            raise ValueError("No clean data found after noise filtering. All experiments had noise > 1%.")
+    else:
+        print("ℹ️  No noise_level column found - assuming all data is clean")
+    
     # derive subject
     df["subject"] = df.apply(derive_subject_id, axis=1)
     
@@ -423,7 +438,7 @@ def plot_figure(stats_df: pd.DataFrame, subj_curves: Dict[str, Dict[str, List[fl
 
     # labels/legend/limits with N information
     ax.set_xlabel(x_label, fontweight="bold")
-    ax.set_ylabel("Cohen's κ", fontweight="bold")
+    ax.set_ylabel("Test Cohen's κ", fontweight="bold")
     
     # Calculate N for caption
     total_subjects = len(set().union(*[list(subj_curves.keys())]))

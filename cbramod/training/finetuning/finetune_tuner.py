@@ -134,10 +134,6 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     # TEST TO DELETE:
     params.num_of_classes = trial.suggest_categorical("num_of_classes", [4, 5])
     params.label_mapping_version = trial.suggest_categorical("label_mapping_version", ["v0", "v1"])
-    params.embedding_dim = trial.suggest_categorical("embedding_dim", [256, 512, 768])
-    params.layers = trial.suggest_int("layers", 8, 16)
-    params.heads = trial.suggest_categorical("heads", [4, 8, 12, 16])
-
     params.use_amp = trial.suggest_categorical("use_amp", [True, False])
     params.epochs = trial.suggest_int("epochs", 50, 200)
     params.use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
@@ -162,9 +158,9 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     # === Noise Injection for Robustness Analysis ===
     # Enable comprehensive noise injection parameter sweeps
     params.noise_level = trial.suggest_categorical("noise_level", [
-        0.0,    # Clean baseline
-        0.05,   # 5% noise (light)
-        0.10,   # 10% noise (moderate) 
+        # 0.0,    # Clean baseline
+        # 0.05,   # 5% noise (light)
+        # 0.10,   # 10% noise (moderate) 
         0.15,   # 15% noise (heavy)
         0.20    # 20% noise (very heavy)
     ])
@@ -227,7 +223,7 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     trial.set_user_attr("test_f1", f1)
     trial.set_user_attr("test_accuracy", acc)
 
-    if kappa > 0.6 and multi_eval:
+    if kappa > 0.7 and multi_eval:
         if not multi_eval_subjects:
             multi_eval_subjects = ['S001', 'S002','S003', 'S004', 'S005', 'S006', 'S007', 'S009', 'S010', 'S012', 'S013', 'S014','S016']
         run_multi_eval(params, multi_eval_subjects)

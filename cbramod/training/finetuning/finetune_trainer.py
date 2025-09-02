@@ -29,7 +29,10 @@ from torchinfo import summary
 from sklearn.metrics import classification_report, balanced_accuracy_score, accuracy_score, cohen_kappa_score, f1_score
 from collections import Counter
 from csv import QUOTE_MINIMAL
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None
 import optuna
 import gc
 import logging

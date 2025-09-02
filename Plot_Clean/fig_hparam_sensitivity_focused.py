@@ -102,6 +102,18 @@ class FocusedHPAnalyzer:
         df = pd.read_csv(csv_path)
         print(f"   Original: {len(df)} rows, {len(df.columns)} columns")
         
+        # CRITICAL: Filter out high noise experiments to avoid bias
+        if 'noise_level' in df.columns:
+            noise_stats = df['noise_level'].value_counts().sort_index()
+            print(f"🔊 Noise level distribution: {dict(noise_stats)}")
+            
+            # Keep only clean data (noise_level <= 0.01 or 1%) 
+            df = df[df['noise_level'] <= 0.01].copy()
+            print(f"✅ Filtered to clean data: {len(df)} rows remaining (noise ≤ 1%)")
+            
+            if len(df) == 0:
+                raise ValueError("No clean data found after noise filtering.")
+        
         # Remove rows with missing target
         target = 'contract.results.test_kappa'
         df_clean = df.dropna(subset=[target]).copy()
@@ -347,37 +359,23 @@ class FocusedHPAnalyzer:
                    color='#2C3E50', capsize=3, capthick=1.0, 
                    elinewidth=1.0, alpha=0.7, zorder=10)
         
-        # Enhanced axis formatting
+        # Enhanced axis formatting - use consistent styling
         ax.set_yticks(y_pos)
         ax.set_yticklabels(labels, fontsize=12, fontweight='normal')
-        ax.set_xlabel('Performance Degradation (Δκ) when Randomized', fontsize=14, fontweight='bold', 
-                     labelpad=15, color='#2C3E50')
+        ax.set_xlabel('Performance Degradation (Δκ) when Randomized', fontsize=16, fontweight='bold')
         
-        # Enhanced title with model insights
+        # Enhanced title with model insights - use consistent styling
         title_text = 'CBraMod Hyperparameter Impact Analysis'
-        ax.set_title(title_text, fontsize=18, fontweight='bold', 
-                    pad=25, color='#2C3E50')
+        ax.set_title(title_text, fontsize=18, fontweight='bold', pad=25)
         
-        # Subtitle with key insights
+        # Subtitle with key insights - use consistent styling
         subtitle = f'Performance Degradation (Δκ) when Parameters Randomized | N = {n_runs:,} experiments'
         ax.text(0.5, 0.98, subtitle, transform=ax.transAxes, ha='center', 
-               fontsize=12, style='italic', color='#5D6D7E')
+               fontsize=12, style='italic')
         
-        # Enhanced grid styling
-        ax.grid(True, axis='x', alpha=0.4, linestyle='-', linewidth=0.8, color='#BDC3C7')
+        # Use consistent grid styling
+        ax.grid(True, alpha=0.3)
         ax.set_axisbelow(True)  # Grid behind bars
-        
-        # Clean spine styling
-        for spine in ax.spines.values():
-            spine.set_color('#2C3E50')
-            spine.set_linewidth(1.2)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        
-        # Enhanced tick styling
-        ax.tick_params(axis='both', which='major', labelsize=11, 
-                      colors='#2C3E50', width=1.2, length=6)
-        ax.tick_params(axis='both', which='minor', width=0.8, length=3)
         
         # Professional legend positioned outside plot at bottom
         unique_groups = sorted(list(set(groups)))
@@ -407,28 +405,26 @@ class FocusedHPAnalyzer:
                              title='Parameter Categories',
                              title_fontsize=12)
             legend.get_frame().set_facecolor('white')
-            legend.get_frame().set_edgecolor('#BDC3C7')
-            legend.get_frame().set_linewidth(1)
             legend.get_frame().set_alpha(0.95)
         
         # Add significance markers and practical significance thresholds
         for i, (imp, ci_low, ci_high) in enumerate(zip(importances, ci_lows, ci_highs)):
             if ci_low > 0:  # Statistically significant (CI doesn't include 0)
                 marker = '***' if imp > 0.02 else '**' if imp > 0.01 else '*'
-                ax.text(imp + max(imp * 0.05, 0.005), i, marker, fontsize=14, fontweight='bold', 
-                       color='#E74C3C', ha='left', va='center')
+                ax.text(imp + max(imp * 0.05, 0.005), i, marker, fontsize=14, fontweight='bold',
+                       color=get_color('t_star'), ha='left', va='center')
         
-        # Add practical significance threshold line
-        ax.axvline(x=0.01, color='#E74C3C', linestyle=':', alpha=0.6, linewidth=2)
-        ax.text(0.01, len(labels) * 0.95, 'Practical\nSignificance', rotation=90, 
-               ha='right', va='top', fontsize=9, color='#E74C3C', alpha=0.8)
+        # Add practical significance threshold line - use consistent colors
+        ax.axvline(x=0.01, color=get_color('t_star'), linestyle=':', alpha=0.6, linewidth=2)
+        ax.text(0.01, len(labels) * 0.95, 'Practical\nSignificance', rotation=90,
+               ha='right', va='top', fontsize=9, color=get_color('t_star'), alpha=0.8)
         
         # Tighten layout with space for bottom legend
         plt.subplots_adjust(left=0.25, right=0.95, top=0.92, bottom=0.20)
         
         # Save using consistent save function
         base_path = Path(output_path).with_suffix('')
-        saved_files = save_figure(fig, base_path, formats=['png', 'svg'])
+        saved_files = save_figure(fig, base_path, formats=['png', 'svg', 'pdf'])
         
         # Print N information for caption
         print(f"\n📋 Caption info: {format_n_caption(n_runs, n_runs, 'runs')}")
