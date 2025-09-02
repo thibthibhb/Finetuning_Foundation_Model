@@ -445,9 +445,9 @@ def plot_figure(stats_df: pd.DataFrame, subj_curves: Dict[str, Dict[str, List[fl
     total_runs = sum(row['n_subjects'] for _, row in stats_df.iterrows())
     
     if num_subjects is not None:
-        title = f"Figure 1: Calibration Dose-Response\n{format_n_caption(num_subjects, total_runs, 'subjects')}"
+        title = f"Calibration Dose-Response\n{format_n_caption(num_subjects, total_runs, 'subjects')}"
     else:
-        title = f"Figure 1: Calibration Dose-Response (5-class)\n{format_n_caption(total_subjects, total_runs, 'subjects')}"
+        title = f"Calibration Dose-Response (5-class)\n{format_n_caption(total_subjects, total_runs, 'subjects')}"
     
     ax.set_title(title, pad=20, fontweight="bold")
     ax.legend(loc="upper left", frameon=True, fancybox=True, shadow=True)
@@ -601,7 +601,7 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
                        edgecolors='black', linewidth=0.8)
 
     ax.set_xlabel('Number of Training Subjects', fontweight='bold')
-    ax.set_ylabel("Cohen's κ", fontweight='bold')
+    ax.set_ylabel("Test Cohen's κ", fontweight='bold')
     ax.set_title('CBraMod Calibration: Performance vs Training Data Size\n(Top 10 runs per subject count)',
                  fontweight='bold', fontsize=14, pad=20)
     ax.legend(loc='lower right', frameon=True, fancybox=True, shadow=True)
