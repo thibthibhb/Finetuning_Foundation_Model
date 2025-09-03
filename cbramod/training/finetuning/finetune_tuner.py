@@ -127,7 +127,6 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
         "foundation_dir", [
             "./saved_models/pretrained/BEST__loss10527.31.pth",
             "./saved_models/pretrained/pretrained_weights.pth"
-            # "./saved_models/pretrained/BEST__loss8698.99.pth",
         ]
     )
 
@@ -223,7 +222,7 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     trial.set_user_attr("test_f1", f1)
     trial.set_user_attr("test_accuracy", acc)
 
-    if kappa > 0.7 and multi_eval:
+    if kappa > 0.55 and multi_eval:
         if not multi_eval_subjects:
             multi_eval_subjects = ['S001', 'S002','S003', 'S004', 'S005', 'S006', 'S007', 'S009', 'S010', 'S012', 'S013', 'S014','S016']
         run_multi_eval(params, multi_eval_subjects)
@@ -233,9 +232,9 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
 
     return kappa
 
-def run_optuna_tuning(params, multi_eval=False, multi_eval_subjects=None):
+def run_optuna_tuning(params, multi_eval=False, multi_eval_subjects=None, n_trials=20):
     study = optuna.create_study(direction="maximize", pruner=optuna.pruners.MedianPruner(n_warmup_steps=0))
-    study.optimize(lambda trial: objective(trial, params, multi_eval, multi_eval_subjects), n_trials=20)
+    study.optimize(lambda trial: objective(trial, params, multi_eval, multi_eval_subjects), n_trials=n_trials)
 
     best_trial = study.best_trial
     print("=== Top Trials by Test Kappa ===")
@@ -394,7 +393,7 @@ if __name__ == "__main__":
     parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
     parser.add_argument('--robustness_study', action='store_true', help='Run robustness-focused study instead of general tuning')
     parser.add_argument('--robustness_trials', type=int, default=50, help='Number of trials for robustness study')
-    
+    parser.add_argument('--n_trials', type=int, default=20, help='Number of Optuna trials for general tuning')
     args, _ = parser.parse_known_args()
 
     params = main(return_params=True)
@@ -405,4 +404,4 @@ if __name__ == "__main__":
         run_robustness_study(params, n_trials=args.robustness_trials, study_name=study_name)
     else:
         print("🔍 Running GENERAL hyperparameter tuning study") 
-        run_optuna_tuning(params, multi_eval=args.multi_eval, multi_eval_subjects=args.multi_eval_subjects)
+        run_optuna_tuning(params, multi_eval=args.multi_eval, multi_eval_subjects=args.multi_eval_subjects, n_trials=args.n_trials)

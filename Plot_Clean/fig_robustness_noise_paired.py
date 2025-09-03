@@ -28,7 +28,7 @@ warnings.filterwarnings('ignore')
 # Import consistent figure styling
 from figure_style import (
     setup_figure_style, get_color, save_figure, 
-    bootstrap_ci_median, wilcoxon_test
+    bootstrap_ci_median, wilcoxon_test, OKABE_ITO
 )
 
 def load_and_merge_data(csv_path: str, test_subjects_path: str) -> pd.DataFrame:
@@ -280,14 +280,14 @@ def create_robustness_figure_paired(df: pd.DataFrame, paired_results: Dict, stat
     """Create the enhanced robustness figure with paired analysis."""
     
     setup_figure_style()
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 6.5))
     
-    # Base colors for artifact families
+    # Base colors for artifact families - using consistent Okabe-Ito palette
     artifact_colors = {
-        'gaussian': '#E69F00',    # Orange family
-        'emg': '#D55E00',         # Red family
-        'electrode': '#009E73',   # Green family  
-        'realistic': '#CC79A7'    # Purple family
+        'gaussian': get_color('cbramod'),     # Blue (#0072B2) - primary method color
+        'emg': OKABE_ITO[1],                  # Orange (#E69F00) 
+        'electrode': OKABE_ITO[2],            # Green (#009E73)
+        'realistic': OKABE_ITO[4]             # Purple (#CC79A7)
     }
     
     paired_df = paired_results['paired_df']
@@ -326,9 +326,9 @@ def create_robustness_figure_paired(df: pd.DataFrame, paired_results: Dict, stat
     
     bars = ax1.bar(noise_labels, medians, 
                   yerr=errors,
-                  capsize=5, error_kw={'linewidth': 2},
+                  capsize=5, error_kw={'linewidth': 2, 'capthick': 2},
                   color=[artifact_colors[noise_type] for noise_type in noise_types],
-                  alpha=0.8, edgecolor='black', linewidth=0.5)
+                  alpha=0.85, edgecolor='white', linewidth=1.5)
     
     # Add significance markers from Wilcoxon tests
     for i, (bar, noise_type) in enumerate(zip(bars, noise_types)):
@@ -377,7 +377,7 @@ def create_robustness_figure_paired(df: pd.DataFrame, paired_results: Dict, stat
     
     bars2 = ax2.bar(noise_labels, effect_sizes,
                    color=[artifact_colors[noise_type] for noise_type in noise_types],
-                   alpha=0.8, edgecolor='black', linewidth=0.5)
+                   alpha=0.85, edgecolor='white', linewidth=1.5)
     
     # Add value labels
     for bar, effect in zip(bars2, effect_sizes):
@@ -409,10 +409,17 @@ def create_robustness_figure_paired(df: pd.DataFrame, paired_results: Dict, stat
         parts = ax3.violinplot(delta_data, positions=range(len(delta_data)), 
                               showmeans=False, showmedians=True)
         
-        # Color the violins
+        # Color the violins with consistent styling
         for i, (part, color) in enumerate(zip(parts['bodies'], delta_colors)):
             part.set_facecolor(color)
-            part.set_alpha(0.7)
+            part.set_alpha(0.75)
+            part.set_edgecolor('white')
+            part.set_linewidth(1.5)
+        
+        # Style the median lines
+        if 'cmedians' in parts:
+            parts['cmedians'].set_color('black')
+            parts['cmedians'].set_linewidth(2)
         
         ax3.set_xticks(range(len(delta_labels)))
         ax3.set_xticklabels(delta_labels, rotation=45)
@@ -422,13 +429,13 @@ def create_robustness_figure_paired(df: pd.DataFrame, paired_results: Dict, stat
     ax3.set_title('C) Per-Subject Δκ Distribution', fontweight='bold', pad=15)
     ax3.grid(True, alpha=0.3, axis='y')
     
-    # Overall figure adjustments
-    plt.tight_layout()
-    
-    # Add overall title
+    # Add overall title first
     fig.suptitle('CBraMod Robustness to Ear-EEG Noise Artifacts (Paired Analysis)', 
-                fontsize=16, fontweight='bold', y=0.98)
-    plt.subplots_adjust(top=0.90)
+                fontsize=16, fontweight='bold', y=0.95)
+    
+    # Overall figure adjustments with proper spacing for title
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.82)
     
     # Save figure using consistent save function
     saved_files = save_figure(fig, output_path)
