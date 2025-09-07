@@ -9,7 +9,7 @@ or fewer subjects with more data each?"
 Uses real W&B data: hours_of_data / num_subjects_train to calculate minutes per subject.
 
 Usage:
-  python fig4_subjects_vs_minutes.py --csv Plot_Clean/data/all_runs_flat.csv
+  python Plot_Clean/plot_subjects_vs_minutes.py --csv Plot_Clean/data/all_runs_flat.csv
 """
 
 import pandas as pd
@@ -1048,16 +1048,12 @@ def create_figure_4(df: pd.DataFrame, output_dir: Path, run_comprehensive_tests:
                     frameon=True, fancybox=True, shadow=True,
                     fontsize=11, handlelength=2, columnspacing=2)
     
-    # Add statistical methodology note
-    legend_ax.text(0.5, 0.2, 'Error bars = subject-level bootstrap 95% CI. All plots show top performers per bin to reduce noise.', 
-                  ha='center', va='center', transform=legend_ax.transAxes, 
-                  fontsize=9, alpha=0.7, style='italic')
     
     #plt.tight_layout()
     
     # Save using consistent save function
     output_dir.mkdir(parents=True, exist_ok=True)
-    base_path = output_dir / 'figure_4_subjects_vs_minutes'
+    base_path = output_dir / 'subjects_vs_minutes_analysis'
     save_figure(fig, base_path)
     
     # Analysis summary
@@ -1180,7 +1176,7 @@ def main():
     """Main execution function."""
     parser = argparse.ArgumentParser(description='Subjects vs Minutes Analysis')
     parser.add_argument("--csv", required=True, help="Path to flattened CSV")
-    parser.add_argument("--out", default="Plot_Clean/figures/fig4", help="Output directory")
+    parser.add_argument("--out", default="Plot_Clean/figures", help="Output directory")
     parser.add_argument("--test", action="store_true", help="Run comprehensive testing suite")
     args = parser.parse_args()
 

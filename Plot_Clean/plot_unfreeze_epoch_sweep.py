@@ -11,7 +11,7 @@ Shows three key analyses in a single figure:
 3. Overfit index = (best val κ - final test κ)
 
 Usage:
-  python fig_unfreeze_epoch_sweep.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
+  python Plot_Clean/plot_unfreeze_epoch_sweep.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
 """
 
 import argparse

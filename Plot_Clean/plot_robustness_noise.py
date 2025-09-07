@@ -6,7 +6,7 @@ Creates a publication-ready figure comparing model performance across
 different noise conditions for ear-EEG sleep staging robustness evaluation.
 
 Usage:
-    python Plot_Clean/fig_robustness_noise.py --csv Plot_Clean/data/all_runs_flat.csv
+    python Plot_Clean/plot_robustness_noise.py --csv Plot_Clean/data/all_runs_flat.csv
 
 Author: CBraMod Research Team
 """
@@ -237,7 +237,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate robustness noise comparison figure')
     parser.add_argument('--csv', required=True, help='Path to structured runs CSV')
     parser.add_argument('--output-dir', default='./Plot_Clean/figures', help='Output directory')
-    parser.add_argument('--output-name', default='fig_robustness_noise', help='Output filename (without extension)')
+    parser.add_argument('--output-name', default='robustness_noise_analysis', help='Output filename (without extension)')
     
     args = parser.parse_args()
     

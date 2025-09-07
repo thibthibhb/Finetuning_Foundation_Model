@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# fig1_from_csv.py
+# plot_calibration_comparison.py
 """
 Figure 1 — Calibration dose–response from CSV (no WandB needed)
 
@@ -18,7 +18,7 @@ CSV requirements:
       * minutes (optional): cfg.calib_minutes / cfg.minutes_calib (if you set --x minutes)
 
 Usage:
-  python Plot_Clean/fig1_from_csv.py --csv Plot_Clean/data/all_runs_flat.csv --x nights --yasa-kappa 0.446 --delta 0.05
+  python Plot_Clean/plot_calibration_comparison.py --csv Plot_Clean/data/all_runs_flat.csv 
 """
 
 import argparse
@@ -186,15 +186,15 @@ def load_and_prepare(csv_path: Path, x_mode: str, num_subjects: Optional[int] = 
             num_datasets_col = col
             break
     
-    # Remove data corruption: ORP alone cannot have >11 subjects
+    # Remove data corruption: IDUN alone cannot have >11 subjects
     if 'dataset_composition' in df.columns and 'num_subjects' in df.columns:
-        corrupt_entries = df[(df['dataset_composition'] == 'ORP') & (df['num_subjects'] > 11)]
+        corrupt_entries = df[(df['dataset_composition'] == 'IDUN') & (df['num_subjects'] > 11)]
         if len(corrupt_entries) > 0:
-            print(f"🚨 Removing {len(corrupt_entries)} CORRUPT entries (ORP dataset with >11 subjects):")
+            print(f"🚨 Removing {len(corrupt_entries)} CORRUPT entries (IDUN dataset with >11 subjects):")
             for _, row in corrupt_entries.iterrows():
                 print(f"  {row['name']}: {row['num_subjects']} subjects, dataset={row['dataset_composition']} - IMPOSSIBLE!")
-            df = df[~((df['dataset_composition'] == 'ORP') & (df['num_subjects'] > 11))]
-            print(f"After removing corrupt ORP entries: {len(df)} rows")
+            df = df[~((df['dataset_composition'] == 'IDUN') & (df['num_subjects'] > 11))]
+            print(f"After removing corrupt IDUN entries: {len(df)} rows")
     
     # Remove entries with spaces in dataset composition (formatting issue)
     if 'dataset_composition' in df.columns:
@@ -462,9 +462,9 @@ def plot_figure(stats_df: pd.DataFrame, subj_curves: Dict[str, Dict[str, List[fl
 
     outdir.mkdir(parents=True, exist_ok=True)
     if num_subjects is not None:
-        base_path = outdir / f"figure_1_calibration_dose_response_{num_subjects}subj"
+        base_path = outdir / f"calibration_dose_response_{num_subjects}subj"
     else:
-        base_path = outdir / "figure_1_calibration_dose_response_from_csv"
+        base_path = outdir / "calibration_dose_response_from_csv"
     
     plt.tight_layout()
     save_figure(fig, base_path)
@@ -547,8 +547,31 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
         return None
 
     stats_df = pd.DataFrame(subject_count_data)
+    
+    # Filter out blue dots around 45-50 subjects (keep pink/other colors)
+    print(f"Before filtering: {len(stats_df)} data points")
+    # Remove blue dataset points in 45-50 range - identify blue by checking first dataset (usually the blue one)
+    if len(unique_datasets) > 0:
+        first_dataset = sorted(unique_datasets)[0]  # This is typically the blue one
+        blue_high_subjects = stats_df[
+            (stats_df['dataset_composition'] == first_dataset) & 
+            (stats_df['num_subjects'] >= 45) & 
+            (stats_df['num_subjects'] <= 50)
+        ]
+        if len(blue_high_subjects) > 0:
+            print(f"🚨 Removing {len(blue_high_subjects)} blue dots in 45-50 subject range:")
+            for _, row in blue_high_subjects.iterrows():
+                print(f"  {row['num_subjects']} subjects, {row['dataset_composition']}, κ={row['median_kappa']:.3f}")
+            stats_df = stats_df[~(
+                (stats_df['dataset_composition'] == first_dataset) & 
+                (stats_df['num_subjects'] >= 45) & 
+                (stats_df['num_subjects'] <= 50)
+            )].copy()
+            print(f"After filtering: {len(stats_df)} data points remaining")
+    
     fig, ax = plt.subplots(1, 1, figsize=(12, 8))
 
+    # ORIGINAL MEDIAN PLOTTING CODE (restored) - Remove black edges
     for dataset_comp in unique_datasets:
         dataset_data = stats_df[stats_df['dataset_composition'] == dataset_comp]
         if dataset_data.empty:
@@ -567,10 +590,10 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
                 ],
                 fmt='o', color=color, markersize=8,
                 markerfacecolor=color,  # Fill the dots
-                markeredgecolor="white",  # White edge for contrast
-                markeredgewidth=2,
+                markeredgecolor=color,  # REMOVED white edge - same as fill
+                markeredgewidth=0,      # REMOVED edge width
                 capsize=6, capthick=2.5, elinewidth=2,
-                label=dataset_comp, zorder=3
+                label='IDUN' if dataset_comp == 'ORP' else dataset_comp, zorder=3
             )
 
         missing_ci = ~valid_ci
@@ -580,15 +603,53 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
                 dataset_data.loc[missing_ci, 'median_kappa'],
                 'o', color=color, markersize=8,
                 markerfacecolor=color,  # Fill the dots
-                markeredgecolor="white",  # White edge for contrast
-                markeredgewidth=2,
-                label=dataset_comp if not valid_ci.any() else "", zorder=3
+                markeredgecolor=color,  # REMOVED white edge - same as fill
+                markeredgewidth=0,      # REMOVED edge width
+                label=('IDUN' if dataset_comp == 'ORP' else dataset_comp) if not valid_ci.any() else "", zorder=3
             )
+    
+    # ADD TOP PERFORMERS FOR EACH SUBJECT COUNT BIN (keeping this feature)
+    print("\n🌟 Adding top performers for each subject count:")
+    for subj_count in sorted(df['num_subjects'].unique()):
+        subj_df = df[df['num_subjects'] == subj_count]
+        if len(subj_df) == 0:
+            continue
+        
+        # Find top performer for this subject count
+        best_run = subj_df.loc[subj_df['test_kappa'].idxmax()]
+        best_kappa = best_run['test_kappa']
+        dataset_comp = best_run['dataset_composition']
+        
+        # Skip impossible combinations: IDUN/ORP solo with >44 subjects
+        # But find alternative from multi-dataset (pink) entries
+        if dataset_comp in ['IDUN', 'ORP'] and subj_count > 44:
+            print(f"  {subj_count} subjects: SKIPPING impossible {dataset_comp} solo with {subj_count} subjects!")
+            # Find best performer from non-single-dataset entries (multi-dataset combinations)
+            multi_dataset_entries = subj_df[~subj_df['dataset_composition'].isin(['IDUN', 'ORP'])]
+            if len(multi_dataset_entries) > 0:
+                best_run = multi_dataset_entries.loc[multi_dataset_entries['test_kappa'].idxmax()]
+                best_kappa = best_run['test_kappa']
+                dataset_comp = best_run['dataset_composition']
+                print(f"  {subj_count} subjects: Using MULTI-DATASET top performer instead:")
+            else:
+                print(f"  {subj_count} subjects: No multi-dataset alternatives found, skipping")
+                continue
+        
+        print(f"  {subj_count} subjects: κ={best_kappa:.3f} ({dataset_comp}) - {best_run['name']}")
+        
+        # Plot top performer as star - remove black edges
+        ax.scatter([subj_count], [best_kappa], 
+                  marker='*', s=120, 
+                  color=dataset_colors[dataset_comp], 
+                  edgecolors=dataset_colors[dataset_comp],  # REMOVED black edges
+                  linewidth=0,                             # REMOVED edge width
+                  zorder=5, alpha=1.0,
+                  label='Top Performer' if subj_count == sorted(df['num_subjects'].unique())[0] else "")
 
     # YASA baseline (muted yellow) + band
     add_yasa_baseline(ax, yasa_kappa, yasa_ci)
 
-    # Crossing marker (use green)
+    # Crossing marker (restored)
     crossing_points = [int(r['num_subjects']) for _, r in stats_df.iterrows() if r['median_kappa'] > yasa_kappa]
     if crossing_points:
         first_crossing = min(crossing_points)
@@ -617,7 +678,7 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
     ax.set_ylim(y_min, y_max)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    base_path = output_dir / 'figure_1_calibration_comprehensive'
+    base_path = output_dir / 'calibration_comparison'
     plt.tight_layout()
     save_figure(fig, base_path)
 
@@ -637,7 +698,7 @@ def create_comprehensive_plot(df: pd.DataFrame, output_dir: Path):
 def main():
     ap = argparse.ArgumentParser(description='Generate comprehensive CBraMod calibration plot')
     ap.add_argument("--csv", required=True, help="Path to flattened CSV (e.g., all_runs_flat.csv)")
-    ap.add_argument("--out", default="Plot_Clean/figures/fig1", help="Output directory")
+    ap.add_argument("--out", default="Plot_Clean/figures", help="Output directory")
     args = ap.parse_args()
 
     setup_figure_style()

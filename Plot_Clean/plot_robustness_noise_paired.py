@@ -10,7 +10,7 @@ Enhanced version that:
 - Fills panel C with the per-subject Δκ distribution at 10%
 
 Usage:
-    python Plot_Clean/fig_robustness_noise_paired.py --csv Plot_Clean/data/all_runs_flat.csv --test_subjects Plot_Clean/data/all_test_subjects_complete.csv
+    python Plot_Clean/plot_robustness_noise_paired.py --csv Plot_Clean/data/all_runs_flat.csv --test_subjects Plot_Clean/data/all_test_subjects_complete.csv
 """
 
 import pandas as pd
@@ -482,7 +482,7 @@ def main():
     parser.add_argument('--csv', required=True, help='Path to structured runs CSV')
     parser.add_argument('--test-subjects', required=True, help='Path to test subjects CSV')
     parser.add_argument('--output-dir', default='./Plot_Clean/figures', help='Output directory')
-    parser.add_argument('--output-name', default='fig_robustness_noise_paired', help='Output filename (without extension)')
+    parser.add_argument('--output-name', default='robustness_noise_paired', help='Output filename (without extension)')
     
     args = parser.parse_args()
     

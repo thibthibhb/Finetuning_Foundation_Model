@@ -1,203 +1,156 @@
-# CBraMod Clean Plotting & Analysis System
+# CBraMod Publication-Ready Analysis & Plotting
 
-A structured approach to loading, analyzing, and visualizing CBraMod experiment results following a fair comparison "contract".
+Clean, structured approach to analyzing and visualizing CBraMod experiment results with descriptive naming and organized output structure.
 
 ## 📋 Overview
 
-This system implements the 5-step process for clean, fair analysis:
+This system provides publication-ready plots for CBraMod research with:
 
-1. **Define comparison contract** - Structured requirements for fair comparison
-2. **Build analysis cohorts** - Group experiments by comparable conditions  
-3. **Normalize run metadata** - Ensure all runs have consistent, joinable metadata
-4. **Quality assurance** - Sanity checks and validation before plotting
-5. **Generate clean plots** - Publication-ready visualizations
+1. **Descriptive naming** - Clear, meaningful names for both scripts and outputs
+2. **Flat structure** - All figures in one location (`figures/`) for easy access
+3. **Consistent styling** - Unified visual style across all plots
+4. **Reproducible workflow** - CSV-based analysis independent of WandB API
 
 ## 🚀 Quick Start
 
-### 1. Load and Structure Runs
+### 1. Generate Structured Data (Required First)
 
-First, load all WandB runs and structure them according to the contract:
-
-```bash
-python load_and_structure_runs.py --project CBraMod-earEEG-tuning --entity thibaut_hasle-epfl
-```
-
-This will:
-- Load ALL runs from WandB (with proper pagination)
-- Structure metadata according to the comparison contract
-- Build analysis cohorts (5-class, 4-class, ICL, scaling)
-- Run quality assurance checks
-- Save structured data to `Plot_Clean/data/`
-
-### 2. Explore the Data
-
-Explore and understand your loaded data:
+Extract and structure experimental data from WandB:
 
 ```bash
-python explore_data.py --data-file Plot_Clean/data/all_runs.csv --create-plots
+python Plot_Clean/load_and_structure_runs.py \
+    --project CBraMod-earEEG-tuning \
+    --entity thibaut_hasle-epfl \
+    --output-dir Plot_Clean/data/
 ```
 
-This will:
-- Generate comprehensive data summary
-- Identify potential issues
-- Create exploratory visualization plots
-- Save results to `Plot_Clean/outputs/exploration/`
+This creates CSV files needed for all subsequent analyses.
 
-### 3. Create Analysis Plots
+### 2. Generate Individual Plots
 
-(Coming next - this is where we'll implement the clean plotting functions)
+All publication-ready plots with descriptive names:
 
-## 📁 File Structure
+```bash
+# Calibration and performance comparison
+python Plot_Clean/plot_calibration_comparison.py --csv Plot_Clean/data/all_runs_flat.csv
+
+# Training efficiency analysis  
+python Plot_Clean/plot_subjects_vs_minutes.py --csv Plot_Clean/data/all_runs_flat.csv
+
+# Training stage progression analysis
+python Plot_Clean/plot_training_stage_gains.py --csv Plot_Clean/data/all_runs_flat.csv
+
+# Noise robustness analysis (paired subjects)
+python Plot_Clean/plot_robustness_noise_paired.py \
+    --csv Plot_Clean/data/all_runs_flat.csv \
+    --test-subjects Plot_Clean/data/all_test_subjects_complete.csv
+
+# Hyperparameter sensitivity analysis
+python Plot_Clean/plot_hyperparameter_sensitivity.py --csv Plot_Clean/data/all_runs_flat.csv
+
+# Task granularity analysis
+python Plot_Clean/plot_task_granularity_combined.py --csv Plot_Clean/data/all_runs_flat.csv
+```
+
+## 📁 New Organized Structure
 
 ```
 Plot_Clean/
-├── README.md                    # This file
-├── config.py                   # Central configuration
-├── load_and_structure_runs.py  # Main data loading script
-├── explore_data.py             # Data exploration utility
-├── data/                       # Structured data storage
-│   ├── all_runs.csv           # All structured runs
-│   ├── cohort_5_class.csv     # 5-class sleep staging cohort
-│   ├── cohort_4_class.csv     # 4-class sleep staging cohort
-│   ├── cohort_icl_comparison.csv # ICL mode comparison cohort
-│   └── qa_report.json         # Quality assurance report
-├── outputs/                    # Analysis outputs
-├── figures/                    # Generated plots
-└── requirements.txt           # Python dependencies
+├── 🐍 Python Scripts (Descriptive Names)
+│   ├── plot_calibration_comparison.py        # Model calibration analysis
+│   ├── plot_subjects_vs_minutes.py          # Training efficiency analysis
+│   ├── plot_training_stage_gains.py         # Two-phase training progression
+│   ├── plot_robustness_noise_paired.py      # Noise robustness (paired analysis)
+│   ├── plot_robustness_noise.py             # Noise robustness (basic analysis)
+│   ├── plot_hyperparameter_sensitivity.py   # Hyperparameter sensitivity
+│   ├── plot_task_granularity_combined.py    # Task granularity analysis
+│   ├── plot_freeze_comparison.py            # Freeze vs unfreeze comparison
+│   └── figure_style.py                      # Consistent styling utilities
+│
+├── 📊 Generated Figures (Flat Structure)
+│   ├── calibration_comparison.pdf/.png      # Model calibration plots
+│   ├── subjects_vs_minutes_analysis.pdf/.png # Training efficiency plots
+│   ├── training_stage_gains.pdf/.png        # Training progression plots
+│   ├── robustness_noise_paired.pdf/.png     # Paired noise robustness
+│   ├── hyperparameter_sensitivity.pdf/.png  # Hyperparameter analysis
+│   └── task_granularity_combined.pdf/.png   # Task granularity analysis
+│
+└── 📁 Data & Utilities
+    ├── data/                                 # Structured CSV files from WandB
+    ├── load_and_structure_runs.py          # WandB data extraction
+    └── simple_boxplot.py                   # Basic plotting utilities
 ```
 
-## 🎯 Comparison Contract
+## 🎯 Plot Descriptions
 
-The system enforces a strict comparison contract for fairness:
+| Script | Output | Description |
+|--------|--------|-------------|
+| `plot_calibration_comparison.py` | `calibration_comparison.*` | Model performance calibration across conditions |
+| `plot_subjects_vs_minutes.py` | `subjects_vs_minutes_analysis.*` | Training data efficiency analysis |
+| `plot_training_stage_gains.py` | `training_stage_gains.*` | Two-phase training progression analysis |
+| `plot_robustness_noise_paired.py` | `robustness_noise_paired.*` | Paired-subject noise robustness analysis |
+| `plot_hyperparameter_sensitivity.py` | `hyperparameter_sensitivity.*` | Hyperparameter sensitivity analysis |
+| `plot_task_granularity_combined.py` | `task_granularity_combined.*` | Task granularity impact analysis |
 
-### Required Fields
+## 🔧 Key Features
 
-**Dataset & Splits:**
-- Dataset name, number of training subjects, data fraction
-- Split policy (LOSO implied for ear-EEG)
+### Consistent Naming Convention
+- **Scripts**: `plot_[descriptive_name].py` format
+- **Outputs**: `[descriptive_name].pdf/.png` format
+- **No confusing figure numbers** - names describe content
 
-**Preprocessing:**
-- Sample rate, window length, preprocessing version string
+### Simplified Structure
+- **All figures** in single `figures/` directory
+- **No nested subdirectories** - easy to find outputs
+- **Clear separation** of scripts, figures, and data
 
-**Model & Training:**
-- Backbone architecture, optimizer, learning rate, epochs
-- Head type, batch size, scheduler
+### Publication Ready
+- **High-quality outputs** in both PDF and PNG formats
+- **Consistent styling** via `figure_style.py`
+- **Statistical annotations** where appropriate
+- **Clear legends and labels** for all plots
 
-**Results:**
-- Primary metrics: Cohen's κ, macro F1-score
-- Secondary metrics: balanced accuracy, per-stage F1s
-- Test set evaluation only (no train/val contamination)
+## 🚀 Advanced Usage
 
-**Compute:**
-- Effective tokens processed (windows × epochs)
-- Training time, throughput estimates
-
-### Analysis Cohorts
-
-**Cohort A (5-class):** Wake, N1, N2, N3, REM classification
-- Compare model architectures, training methods, ICL modes
-- Same dataset/preprocessing/splits
-
-**Cohort B (4-class):** Wake, Light, Deep, REM classification  
-- Same as above but with 4-class label mapping
-
-**ICL Cohort:** In-context learning comparison
-- Compare proto, cnp (DeepSets), set (Set Transformer) modes
-- Analyze K-sweep performance for K ∈ {1,5,10,20}
-
-**Scaling Cohort:** Data scaling analysis
-- Effect of training data size on performance
-- Subject count vs. performance curves
-
-## 🔍 Quality Assurance
-
-The system runs comprehensive QA checks:
-
-- **Pagination completeness** - Ensures all runs loaded
-- **Data leakage detection** - Verifies subject split integrity  
-- **Class balance consistency** - Checks label distributions
-- **Metric consistency** - Validates calculation methods
-- **Outlier detection** - Flags anomalous runs
-
-## ⚙️ Configuration
-
-All settings are centralized in `config.py`:
-
-- **Plot styling** - Colors, fonts, figure sizes
-- **Metric definitions** - Names, ranges, thresholds
-- **Cohort specifications** - Filters and groupings
-- **ICL configuration** - Modes, K values, comparisons
-
-## 📊 Key Metrics
-
-**Primary Metrics:**
-- **Cohen's κ** - Inter-rater agreement, handles class imbalance
-- **Macro F1** - Average per-class F1, equal class weighting
-
-**Secondary Metrics:**
-- Balanced accuracy, per-stage F1 scores
-- Training efficiency (epochs/sec, GPU-hours)
-- Cost estimates ($/inference, $/night)
-
-**Statistical Reporting:**
-- Mean ± 95% CI across subjects/seeds
-- Bootstrap confidence intervals for per-stage metrics
-- Significance testing for comparisons
-
-## 🎨 Plotting Standards
-
-**Figure Quality:**
-- Publication-ready 300 DPI PNG output
-- Consistent color schemes and styling
-- Clear legends, labels, and titles
-- Grid lines and error bars where appropriate
-
-**Comparison Fairness:**
-- Same query subsets for ICL comparisons
-- Paired statistical tests
-- Confidence intervals on all metrics
-- No cherry-picking of results
-
-## 🛠️ Dependencies
-
-Key packages used:
-- `wandb` - Experiment tracking API
-- `pandas` - Data manipulation
-- `matplotlib` / `seaborn` - Plotting
-- `numpy` - Numerical computing
-- `scikit-learn` - Statistics and metrics
-
-Install with:
+### Custom Output Locations
 ```bash
-pip install -r requirements.txt
+# Specify custom output directory
+python Plot_Clean/plot_calibration_comparison.py \
+    --csv Plot_Clean/data/all_runs_flat.csv \
+    --out /path/to/custom/output
 ```
 
-## 🏃‍♂️ Example Usage
-
-Complete workflow example:
-
+### Batch Generation
+Create all plots at once:
 ```bash
-# 1. Load and structure all runs
-python load_and_structure_runs.py
+#!/bin/bash
+# Generate all publication plots
+CSV_FILE="Plot_Clean/data/all_runs_flat.csv"
+SUBJECTS_FILE="Plot_Clean/data/all_test_subjects_complete.csv"
 
-# 2. Explore the data
-python explore_data.py --create-plots
+python Plot_Clean/plot_calibration_comparison.py --csv $CSV_FILE
+python Plot_Clean/plot_subjects_vs_minutes.py --csv $CSV_FILE  
+python Plot_Clean/plot_training_stage_gains.py --csv $CSV_FILE
+python Plot_Clean/plot_robustness_noise_paired.py --csv $CSV_FILE --test-subjects $SUBJECTS_FILE
+python Plot_Clean/plot_hyperparameter_sensitivity.py --csv $CSV_FILE
+python Plot_Clean/plot_task_granularity_combined.py --csv $CSV_FILE
 
-# 3. Check the quality report
-cat Plot_Clean/data/qa_report.json
-
-# 4. Create publication plots (coming next)
-# python create_analysis_plots.py --cohort 5_class --metric test_kappa
+echo "✅ All publication plots generated in Plot_Clean/figures/"
 ```
 
-## 📈 Next Steps
+## 📚 Dependencies
 
-The foundation is now in place. Next implementations:
+All plots use the shared styling system:
+- `figure_style.py` - Consistent colors, fonts, and layout
+- Standard scientific Python stack: `matplotlib`, `seaborn`, `pandas`, `numpy`
+- Statistical analysis: `scipy`, `scikit-learn`
 
-1. **ICL comparison plots** - κ(CNP) vs κ(proto) scatter plots
-2. **Scaling analysis** - Performance vs. data size curves  
-3. **Architecture comparison** - Head types, optimizers, etc.
-4. **Statistical testing** - Significance tests and effect sizes
-5. **Summary tables** - LaTeX-ready result tables
+## 🔗 Integration
 
-The system is designed to be **extensible** - new cohorts and metrics can be easily added through the configuration system.
+- **Main README**: [`../README.md`](../README.md) - Project overview
+- **CLAUDE.md**: [`../CLAUDE.md`](../CLAUDE.md) - Development commands
+- **Training Guide**: [`../ReadMe_training.md`](../ReadMe_training.md) - Training workflows
+
+---
+
+> **Note**: This reorganized structure eliminates the old `fig1/`, `fig3/`, `fig4/` subdirectories in favor of descriptive names and flat organization for better usability and maintenance.

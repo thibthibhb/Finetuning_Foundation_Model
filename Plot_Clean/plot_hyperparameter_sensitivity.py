@@ -6,7 +6,7 @@ Focused hyperparameter sensitivity analysis for CBraMod with proper filtering,
 grouping, and publication-ready visualization.
 
 Usage:
-    python fig_hparam_sensitivity_focused.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
+    python Plot_Clean/plot_hyperparameter_sensitivity.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
 """
 
 import pandas as pd
@@ -334,8 +334,8 @@ class FocusedHPAnalyzer:
         ci_lows = [item[3][0] for item in top_items]
         ci_highs = [item[3][1] for item in top_items]
         
-        # Colors with enhanced styling
-        colors = [self.group_colors[group] for group in groups]
+        # Make all histograms blue
+        colors = [get_color('cbramod') for group in groups]  # All blue
         
         # Calculate optimal figure dimensions
         n_bars = len(labels)
@@ -346,7 +346,7 @@ class FocusedHPAnalyzer:
         fig, ax = plt.subplots(figsize=(fig_width, fig_height))
         fig.patch.set_facecolor('white')
         
-        # Horizontal bars with enhanced styling
+        # Horizontal bars with enhanced styling - all blue
         y_pos = np.arange(len(labels))
         bars = ax.barh(y_pos, importances, height=0.7, color=colors, alpha=0.85, 
                       edgecolor='white', linewidth=1.5)
@@ -373,54 +373,25 @@ class FocusedHPAnalyzer:
         ax.text(0.5, 0.98, subtitle, transform=ax.transAxes, ha='center', 
                fontsize=12, style='italic')
         
-        # Use consistent grid styling
-        ax.grid(True, alpha=0.3)
-        ax.set_axisbelow(True)  # Grid behind bars
-        
-        # Professional legend positioned outside plot at bottom
-        unique_groups = sorted(list(set(groups)))
-        if len(unique_groups) > 1:
-            legend_elements = []
-            for group in unique_groups:
-                legend_elements.append(
-                    plt.Rectangle((0,0), 1, 1, 
-                                facecolor=self.group_colors[group], 
-                                alpha=0.85, 
-                                edgecolor='white',
-                                linewidth=1.5,
-                                label=group)
-                )
-            
-            legend = ax.legend(handles=legend_elements, 
-                             bbox_to_anchor=(0.5, -0.12), 
-                             loc='upper center',
-                             ncol=len(unique_groups),
-                             frameon=True, 
-                             fancybox=True, 
-                             shadow=False,
-                             borderpad=1,
-                             columnspacing=2,
-                             handlelength=2,
-                             fontsize=11,
-                             title='Parameter Categories',
-                             title_fontsize=12)
-            legend.get_frame().set_facecolor('white')
-            legend.get_frame().set_alpha(0.95)
-        
-        # Add significance markers and practical significance thresholds
+        # Add significance markers at the very end of bars (stars only, no dots or legend)
         for i, (imp, ci_low, ci_high) in enumerate(zip(importances, ci_lows, ci_highs)):
             if ci_low > 0:  # Statistically significant (CI doesn't include 0)
                 marker = '***' if imp > 0.02 else '**' if imp > 0.01 else '*'
-                ax.text(imp + max(imp * 0.05, 0.005), i, marker, fontsize=14, fontweight='bold',
-                       color=get_color('t_star'), ha='left', va='center')
+                # Add significance level text at the end of the bar
+                ax.text(imp + max(imp * 0.02, 0.002), i, marker, fontsize=12, fontweight='bold',
+                       color='red', ha='left', va='center')
+        
+        # Use consistent grid styling
+        ax.grid(True, alpha=0.3)
+        ax.set_axisbelow(True)  # Grid behind bars
         
         # Add practical significance threshold line - use consistent colors
         ax.axvline(x=0.01, color=get_color('t_star'), linestyle=':', alpha=0.6, linewidth=2)
         ax.text(0.01, len(labels) * 0.95, 'Practical\nSignificance', rotation=90,
                ha='right', va='top', fontsize=9, color=get_color('t_star'), alpha=0.8)
         
-        # Tighten layout with space for bottom legend
-        plt.subplots_adjust(left=0.25, right=0.95, top=0.92, bottom=0.20)
+        # Tighten layout without bottom legend space
+        plt.subplots_adjust(left=0.25, right=0.95, top=0.92, bottom=0.10)
         
         # Save using consistent save function
         base_path = Path(output_path).with_suffix('')

@@ -10,7 +10,7 @@ Uses actual YASA baseline F1 scores computed from prediction_yasa.py:
 - Wake: 0.6334, N1: 0.2238, N2: 0.6412, N3: 0.5242, REM: 0.6276
 
 Usage:
-  python fig3_stage_gains_top10.py --csv Plot_Clean/data/all_runs_flat.csv
+  python Plot_Clean/plot_training_stage_gains.py --csv Plot_Clean/data/all_runs_flat.csv
 """
 
 import pandas as pd
@@ -330,9 +330,9 @@ def create_stage_gains_plot_top10(stage_results: dict, output_dir: Path):
     
     # Save the plot
     output_dir.mkdir(parents=True, exist_ok=True)
-    save_figure(fig, output_dir / 'figure_3_stage_gains_top10')
+    save_figure(fig, output_dir / 'training_stage_gains')
     
-    print(f"\\n💾 Saved stage gains plot (top 10 version): {output_dir}/figure_3_stage_gains_top10.pdf")
+    print(f"\\n💾 Saved training stage gains plot: {output_dir}/training_stage_gains.pdf")
     
     return fig
 
@@ -341,7 +341,7 @@ def main():
     parser.add_argument('--csv', type=Path, required=True, 
                        help='Path to CSV with experimental results')
 # Removed t-star parameter as it's not needed for this analysis
-    parser.add_argument('--output', type=Path, default=Path('Plot_Clean/figures/fig3'), 
+    parser.add_argument('--output', type=Path, default=Path('Plot_Clean/figures'), 
                        help='Output directory')
     
     args = parser.parse_args()

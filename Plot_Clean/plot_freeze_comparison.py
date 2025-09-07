@@ -20,7 +20,7 @@ CSV requirements:
       * subject id: cfg.subject_id / cfg.subj_id / cfg.subject / sum.subject_id / name
 
 Usage:
-  python Plot_Clean/fig_freeze_comparison.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
+  python Plot_Clean/plot_freeze_comparison.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures/
 """
 
 import argparse
@@ -52,24 +52,7 @@ CB_COLORS = {
 def setup_plotting_style():
     setup_figure_style()
 
-
 # Remove duplicate bootstrap_ci_median function - using the one from figure_style.py
-    arr = np.asarray(arr, dtype=float)
-    arr = arr[~np.isnan(arr)]
-    if arr.size < 3:
-        return (np.nan, np.nan)
-    try:
-        from scipy.stats import bootstrap
-        rng = np.random.default_rng(42)
-        res = bootstrap((arr,), np.median, n_resamples=2000,
-                        confidence_level=confidence, random_state=rng, method="BCa")
-        return float(res.confidence_interval.low), float(res.confidence_interval.high)
-    except Exception:
-        rng = np.random.default_rng(42)
-        meds = [np.median(rng.choice(arr, size=arr.size, replace=True)) for _ in range(2000)]
-        lo = np.percentile(meds, (1 - confidence) / 2 * 100)
-        hi = np.percentile(meds, (1 + confidence) / 2 * 100)
-        return float(lo), float(hi)
 
 
 def derive_subject_id(row: pd.Series) -> str:

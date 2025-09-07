@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Combined Task Granularity Analysis: 5-class vs 4-class Sleep Staging
+Combined Task Granularity Analysis: 5-class vs 4-class (v0/v1) Sleep Staging
+Compares performance across different label granularities: 5-class, 4-class-v0, and 4-class-v1.
 Merges distribution and paired delta analyses into a single publication-ready figure.
 
 Usage:
-    python Plot-Clean/fig_task_granularity_combined.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures --paired-only
+    python Plot_Clean/plot_task_granularity_combined.py --csv Plot_Clean/data/all_runs_flat.csv --out Plot_Clean/figures --paired-only
 """
 
 import argparse
@@ -30,7 +31,8 @@ from figure_style import (
 # Color scheme (colorblind-safe) - updated to use figure_style
 COLORS = {
     '5-class': get_color('5_class'),
-    '4-class': get_color('4_class'),
+    '4-class-v0': get_color('4_class'),
+    '4-class-v1': get_color('cbramod'),  # Use cbramod color for v1
     'positive': get_color('cbramod'),  # Dark green for positive deltas
     'negative': get_color('yasa')      # Red for negative deltas
 }
@@ -103,11 +105,11 @@ def load_data(csv_path: str) -> pd.DataFrame:
     if 'state' in df_work.columns:
         df_work = df_work[df_work['state'] == 'finished'].copy()
     
-    # Map config names: treat 4c-v0 and 4c-v1 as "4-class", keep "5c" as "5-class"
+    # Map config names: differentiate between 4c-v0 and 4c-v1
     config_mapping = {
         '5c': '5-class',
-        '4c-v0': '4-class', 
-        '4c-v1': '4-class'
+        '4c-v0': '4-class-v0', 
+        '4c-v1': '4-class-v1'
     }
     
     df_work['task_config'] = df_work['config'].map(config_mapping)
@@ -123,33 +125,59 @@ def load_data(csv_path: str) -> pd.DataFrame:
 
 def filter_paired(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filter to subjects who have data in both 5-class and 4-class configurations.
+    Filter to subjects who have data in multiple configurations.
     Handle duplicates by taking the best performance for each subject-config pair.
     
     Args:
         df: DataFrame with all data
         
     Returns:
-        DataFrame with only paired subjects
+        DataFrame with only subjects present in multiple configurations
     """
-    # Handle duplicates by taking the best performance for each subject-config pair
+    # Store original run counts before groupby
+    run_counts = df.groupby(['subject_id', 'task_config']).size().reset_index(name='run_count')
+    
+    # Handle duplicates by taking the best performance for each subject-config pair  
     df_best = df.groupby(['subject_id', 'task_config']).agg({
         'test_kappa': 'max',
         'test_f1': 'max'
     }).reset_index()
     
-    # Find subjects present in both configs
-    subjects_4c = set(df_best[df_best['task_config'] == '4-class']['subject_id'])
-    subjects_5c = set(df_best[df_best['task_config'] == '5-class']['subject_id'])
-    paired_subjects = subjects_4c & subjects_5c
+    # Merge run counts back
+    df_best = df_best.merge(run_counts, on=['subject_id', 'task_config'])
+    
+    # Find subjects present in each config
+    config_subjects = {}
+    available_configs = df_best['task_config'].unique()
+    
+    for config in available_configs:
+        config_subjects[config] = set(df_best[df_best['task_config'] == config]['subject_id'])
+    
+    # Find subjects present in at least two configurations
+    all_subjects = set()
+    for subjects in config_subjects.values():
+        all_subjects.update(subjects)
+    
+    paired_subjects = set()
+    for subject in all_subjects:
+        present_configs = [config for config, subjects in config_subjects.items() if subject in subjects]
+        if len(present_configs) >= 2:
+            paired_subjects.add(subject)
     
     if not paired_subjects:
-        raise ValueError("No subjects found in both 4-class and 5-class configurations")
+        print("Warning: No subjects found in multiple configurations")
+        print(f"Config distributions: {[(config, len(subjects)) for config, subjects in config_subjects.items()]}")
+        # Return all data if no paired subjects found
+        return df_best
     
     # Return only paired subjects
     df_paired = df_best[df_best['subject_id'].isin(paired_subjects)].copy()
     
-    print(f"Found {len(paired_subjects)} paired subjects: {sorted(paired_subjects)}")
+    print(f"Found {len(paired_subjects)} subjects with multiple configs")
+    print(f"Config distributions among paired subjects:")
+    for config in available_configs:
+        n_subjects = len(df_paired[df_paired['task_config'] == config])
+        print(f"  {config}: {n_subjects} subjects")
     print(f"Data shape after pairing: {df_paired.shape}")
     
     return df_paired
@@ -166,25 +194,37 @@ def plot_distributions(ax, df: pd.DataFrame, metric: str, palette: Dict[str, str
     
     Args:
         ax: Matplotlib axis
-        df: DataFrame with paired subjects
+        df: DataFrame with subjects
         metric: Column name for the metric ('test_kappa' or 'test_f1')
         palette: Color palette dictionary
     """
-    configs = ['5-class', '4-class']
-    positions = [0, 1]
+    # Get all available configs and sort them
+    available_configs = sorted(df['task_config'].unique())
+    positions = list(range(len(available_configs)))
     
-    # Prepare data
+    # Prepare data and run counts
     data_by_config = []
-    for config in configs:
-        config_data = df[df['task_config'] == config][metric].dropna().values
+    run_counts_by_config = []
+    colors_box = []
+    for config in available_configs:
+        config_df = df[df['task_config'] == config]
+        config_data = config_df[metric].dropna().values
+        
+        # Sum up run counts for this config (if run_count column exists)
+        if 'run_count' in config_df.columns:
+            total_runs = config_df['run_count'].sum()
+            run_counts_by_config.append(total_runs)
+        else:
+            run_counts_by_config.append(len(config_data))  # Fallback to subject count
+            
         data_by_config.append(config_data)
+        colors_box.append(palette.get(config, palette.get('cbramod', '#1f77b4')))  # Fallback color
     
     # Create boxplots
     bp = ax.boxplot(data_by_config, positions=positions, patch_artist=True,
                     widths=0.5, showfliers=True, whis=1.5)
     
     # Color the boxes
-    colors_box = [palette['5-class'], palette['4-class']]
     for patch, color in zip(bp['boxes'], colors_box):
         patch.set_facecolor(color)
         patch.set_alpha(0.7)
@@ -193,14 +233,14 @@ def plot_distributions(ax, df: pd.DataFrame, metric: str, palette: Dict[str, str
     
     # Add jittered scatter points
     np.random.seed(42)  # For consistent jitter
-    for i, (config, data) in enumerate(zip(configs, data_by_config)):
+    for i, (config, data) in enumerate(zip(available_configs, data_by_config)):
         if len(data) > 0:
             x_jitter = np.random.normal(i, 0.04, size=len(data))
             ax.scatter(x_jitter, data, alpha=0.6, s=20, color=colors_box[i], 
                       edgecolors='white', linewidth=0.5, zorder=3)
     
     # Add median labels in small rounded boxes
-    for i, (config, data) in enumerate(zip(configs, data_by_config)):
+    for i, (config, data) in enumerate(zip(available_configs, data_by_config)):
         if len(data) > 0:
             median_val = np.median(data)
             ax.text(i, ax.get_ylim()[1] * 0.92, format_float(median_val), 
@@ -208,19 +248,120 @@ def plot_distributions(ax, df: pd.DataFrame, metric: str, palette: Dict[str, str
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, 
                             edgecolor='gray', linewidth=0.5))
     
-    # Add sample size annotations
-    for i, data in enumerate(data_by_config):
-        ax.text(i, ax.get_ylim()[1] * 0.98, f'N = {len(data)}', 
-               ha='center', va='top', fontsize=10, fontweight='bold')
+    # Add sample size annotations (show both subjects and runs)
+    for i, (data, run_count) in enumerate(zip(data_by_config, run_counts_by_config)):
+        if run_count != len(data):  # Show both if different
+            ax.text(i, ax.get_ylim()[1] * 0.94, f'N = {len(data)} ({run_count} runs)', 
+                   ha='center', va='top', fontsize=9, fontweight='bold')
+        else:  # Show just the count if same
+            ax.text(i, ax.get_ylim()[1] * 0.94, f'N = {len(data)}', 
+                   ha='center', va='top', fontsize=10, fontweight='bold')
     
     # Styling
     ax.set_xticks(positions)
-    ax.set_xticklabels(configs)
+    ax.set_xticklabels(available_configs, rotation=45, ha='right')
     
     if metric == 'test_kappa':
         ax.set_ylabel("Test Kappa")
     else:
         ax.set_ylabel("Test F1")
+    
+    ax.grid(True, axis='y', alpha=0.3)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+def plot_deltas_absolute(ax, df: pd.DataFrame, metric: str, palette: Dict[str, str]) -> None:
+    """
+    Plot absolute values for all available configurations as side-by-side boxplots.
+    
+    Args:
+        ax: Matplotlib axis
+        df: DataFrame with subjects
+        metric: Column name for the metric ('test_kappa' or 'test_f1')
+        palette: Color palette dictionary
+    """
+    # Get all available configs and sort them
+    available_configs = sorted(df['task_config'].unique())
+    positions = list(range(len(available_configs)))
+    
+    # Prepare data and run counts
+    data_by_config = []
+    run_counts_by_config = []
+    colors_box = []
+    for config in available_configs:
+        config_df = df[df['task_config'] == config]
+        config_data = config_df[metric].dropna().values
+        
+        # Sum up run counts for this config (if run_count column exists)
+        if 'run_count' in config_df.columns:
+            total_runs = config_df['run_count'].sum()
+            run_counts_by_config.append(total_runs)
+        else:
+            run_counts_by_config.append(len(config_data))  # Fallback to subject count
+            
+        data_by_config.append(config_data)
+        colors_box.append(palette.get(config, palette.get('cbramod', '#1f77b4')))  # Fallback color
+    
+    # Create boxplots
+    bp = ax.boxplot(data_by_config, positions=positions, patch_artist=True,
+                    widths=0.5, showfliers=True, whis=1.5)
+    
+    # Color the boxes
+    for patch, color in zip(bp['boxes'], colors_box):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.7)
+        patch.set_edgecolor('black')
+        patch.set_linewidth(0.8)
+    
+    # Add jittered scatter points
+    np.random.seed(42)  # For consistent jitter
+    for i, (config, data) in enumerate(zip(available_configs, data_by_config)):
+        if len(data) > 0:
+            x_jitter = np.random.normal(i, 0.04, size=len(data))
+            ax.scatter(x_jitter, data, alpha=0.6, s=20, color=colors_box[i], 
+                      edgecolors='white', linewidth=0.5, zorder=3)
+    
+    # Get y-axis limits for proper positioning
+    y_min, y_max = ax.get_ylim()
+    y_range = y_max - y_min
+    
+    # Add sample size annotations below boxplots (show both subjects and runs)
+    for i, (data, run_count) in enumerate(zip(data_by_config, run_counts_by_config)):
+        if run_count != len(data):  # Show both if different
+            ax.text(i, y_min + 0.02 * y_range, f'N = {len(data)} ({run_count} runs)', 
+                   ha='center', va='center', fontsize=9, fontweight='bold')
+        else:  # Show just the count if same
+            ax.text(i, y_min + 0.02 * y_range, f'N = {len(data)}', 
+                   ha='center', va='center', fontsize=10, fontweight='bold')
+    
+    # Add median labels in small rounded boxes below N values
+    for i, (config, data) in enumerate(zip(available_configs, data_by_config)):
+        if len(data) > 0:
+            median_val = np.median(data)
+            ax.text(i, y_min + 0.12 * y_range, format_float(median_val), 
+                   ha='center', va='center', fontsize=9, fontweight='bold',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9, 
+                            edgecolor='gray', linewidth=0.5))
+    
+    # Set improved y-axis range for better visibility
+    all_data = np.concatenate(data_by_config)
+    y_min = max(0.3, np.min(all_data) - 0.02)
+    y_max = min(0.9, np.max(all_data) + 0.02)
+    ax.set_ylim(y_min, y_max)
+    
+    # Styling
+    ax.set_xticks(positions)
+    ax.set_xticklabels(available_configs, rotation=45, ha='right')
+    
+    if metric == 'test_kappa':
+        ax.set_ylabel("Test Cohen's κ", fontweight='bold')
+        ax.set_title("Sleep Staging Performance Comparison", fontweight='bold', fontsize=12, pad=15)
+        # Add YASA baseline
+        ax.axhline(y=0.446, color=get_color('yasa'), linestyle='--', linewidth=2, alpha=0.8, 
+                   label=f'YASA baseline (κ=0.446)')
+    else:
+        ax.set_ylabel("Test F1 Score", fontweight='bold')
+        ax.set_title("Sleep Staging F1 Score Comparison", fontweight='bold', fontsize=12, pad=15)
     
     ax.grid(True, axis='y', alpha=0.3)
     ax.spines['top'].set_visible(False)
@@ -339,34 +480,40 @@ def main():
         print("ERROR: No data remaining after filtering.")
         return
     
-    # Set up consistent styling and create figure with 2x2 grid
+    # Set up consistent styling and create figure with 1x2 grid (no histograms)
     setup_figure_style()
-    fig, axes = plt.subplots(2, 2, figsize=(13.5, 7.5), constrained_layout=True)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6), constrained_layout=True)
     
-    # Row 1: Distribution plots
-    plot_distributions(axes[0, 0], df, 'test_kappa', COLORS)
-    plot_distributions(axes[0, 1], df, 'test_f1', COLORS)
-    
-    # Row 2: Delta plots (only works with paired data)
+    # Only delta plots (no distribution histograms)
     if args.paired_only or len(set(df['subject_id'])) < len(df):
-        plot_deltas(axes[1, 0], df, 'test_kappa', COLORS)
-        plot_deltas(axes[1, 1], df, 'test_f1', COLORS)
+        plot_deltas_absolute(axes[0], df, 'test_kappa', COLORS)
+        plot_deltas_absolute(axes[1], df, 'test_f1', COLORS)
     else:
         # If not paired-only, still try to create deltas if possible
         df_paired_auto = filter_paired(df)
         if len(df_paired_auto) > 0:
-            plot_deltas(axes[1, 0], df_paired_auto, 'test_kappa', COLORS)
-            plot_deltas(axes[1, 1], df_paired_auto, 'test_f1', COLORS)
+            plot_deltas_absolute(axes[0], df_paired_auto, 'test_kappa', COLORS)
+            plot_deltas_absolute(axes[1], df_paired_auto, 'test_f1', COLORS)
     
-    # Global title
-    title_text = "Task Granularity: 5-class vs 4-class Sleep Staging"
-    if args.paired_only:
-        title_text += " (Paired Subjects Only)"
-    fig.suptitle(title_text, fontsize=14, fontweight='bold')
+    # Global title with better formatting
+    available_configs = sorted(df['task_config'].unique())
+    title_text = f"CBraMod Performance Across Sleep Staging Granularities"
+    fig.suptitle(title_text, fontsize=16, fontweight='bold')
     
-    # Add footnote for delta plots
-    # fig.text(0.5, 0.02, 'Per-subject paired differences (4c–5c). Line/band: median and bootstrap 95% CI.',
-    #          ha='center', va='bottom', fontsize=9, style='italic')
+    # Add legend at the bottom - only YASA baseline (config names already in figure)
+    handles = []
+    labels = []
+    
+    # Add YASA baseline if kappa is plotted
+    if any('test_kappa' in str(ax.get_ylabel()) for ax in axes):
+        handles.append(plt.Line2D([0], [0], color=get_color('yasa'), linestyle='--', linewidth=2))
+        labels.append('YASA baseline')
+    
+    # Only show legend if we have items to show
+    if handles:
+        fig.legend(handles, labels, loc='lower center', ncol=len(handles), 
+                  bbox_to_anchor=(0.5, 0.02), fontsize=10, frameon=True, 
+                  fancybox=True, shadow=True)
     
     # Save figures
     output_dir = Path(args.out)
@@ -386,7 +533,7 @@ def main():
     
     # Print summary statistics
     print(f"\n=== Summary Statistics ===")
-    for config in ['5-class', '4-class']:
+    for config in sorted(df['task_config'].unique()):
         config_data = df[df['task_config'] == config]
         if len(config_data) > 0:
             kappa_mean = config_data['test_kappa'].mean()

@@ -132,8 +132,10 @@ python Plot_Clean/load_and_structure_runs.py \
     --entity your-entity
 
 # Generate publication figures  
-python Plot_Clean/fig1_from_csv.py --csv Plot_Clean/data/all_runs_flat.csv
-python Plot_Clean/fig4_subjects_vs_minutes.py --csv Plot_Clean/data/all_runs_flat.csv
+python Plot_Clean/plot_calibration_comparison.py --csv Plot_Clean/data/all_runs_flat.csv
+python Plot_Clean/plot_subjects_vs_minutes.py --csv Plot_Clean/data/all_runs_flat.csv
+python Plot_Clean/plot_training_stage_gains.py --csv Plot_Clean/data/all_runs_flat.csv
+python Plot_Clean/plot_robustness_noise_paired.py --csv Plot_Clean/data/all_runs_flat.csv --test-subjects Plot_Clean/data/all_test_subjects_complete.csv
 ```
 
 **📈 Complete Analysis Guide**: See [`Plot_Clean/README.md`](Plot_Clean/README.md) for all visualization options
