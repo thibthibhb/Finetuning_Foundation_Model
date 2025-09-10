@@ -1,6 +1,6 @@
 # =============================================================================
 # CBraMod Project - Clean .gitignore 
-# Only track essential code: cbramod/ and Plot/
+# Only track essential code: cbramod/, plots/, and analysis/
 # =============================================================================
 
 # Directories to completely ignore
@@ -80,15 +80,19 @@ Thumbs.db
 *.7z
 *.rar
 
-# Generated plots and figures
-*.png
-*.jpg
-*.jpeg
-*.gif
-*.pdf
-*.svg
-*.eps
-Plot/figures/
+# Generated plots and figures (but keep plots/ source code)
+plots/figures/*.png
+plots/figures/*.jpg
+plots/figures/*.jpeg
+plots/figures/*.gif
+plots/figures/*.pdf
+plots/figures/*.svg
+plots/figures/*.eps
+# Allow plots/ directory structure and scripts
+!plots/
+!plots/**/*.py
+!plots/**/*.md
+!plots/**/
 
 # Logs and monitoring
 *.log
@@ -96,12 +100,17 @@ Plot/figures/
 tensorboard/
 .mlflow/
 
-# Experiment results and reports
+# Experiment results and reports (but keep analysis structure)
 *.json
-*.csv
-experiment_summary.csv
-finetuning_report_*.json
-multi_run_results_*.json
+analysis/results/*.csv
+# Allow analysis/ directory structure and scripts  
+!analysis/
+!analysis/**/*.py
+!analysis/**/*.md
+!analysis/**/
+# Ignore plots data directories (large CSV files)
+plots/data/
+plots/data_full/
 
 # Database files
 *.sqlite
@@ -159,7 +168,8 @@ share/python-wheels/
 
 # Core source code (keep these)
 # cbramod/
-# Plot/
+# plots/
+# analysis/
 
 # Essential project files (keep these)
 # README.md

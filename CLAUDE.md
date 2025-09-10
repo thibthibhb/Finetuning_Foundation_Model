@@ -90,42 +90,41 @@ python scripts/inference/Inference_local.py
 #### CRITICAL: Plot Data Generation Workflow
 **Step 1**: Generate structured data from WandB (REQUIRED FIRST):
 ```bash
-python Plot_Clean/load_and_structure_runs.py \
+python plots/scripts/load_and_structure_runs.py \
     --project CBraMod-earEEG-tuning \
     --entity thibaut_hasle-epfl \
-    --output-dir Plot_Clean/data/
+    --output-dir plots/data/
 ```
 This creates the CSV files needed for all subsequent plots.
 
 **Step 2**: Verify data was created:
 ```bash
-ls Plot_Clean/data/  # Should show: all_runs_flat.csv, cohort_4_class_flat.csv, etc.
+ls plots/data/  # Should show: all_runs_flat.csv, cohort_4_class_flat.csv, etc.
 ```
 
 #### Individual Plot Generation
-**Figure 4** (subjects vs minutes analysis):
+**Hyperparameter Analysis**:
 ```bash
-python Plot_Clean/fig4_subjects_vs_minutes.py \
-    --csv Plot_Clean/data/all_runs_flat.csv \
-    --out Plot_Clean/figures/
+python plots/scripts/plot_hyperparameter_sensitivity.py
+python plots/scripts/plot_heads_vs_weights_comparison.py
 ```
 
-**Figure 1** (from CSV data):
+**Performance Analysis**:
 ```bash
-python Plot_Clean/fig1_from_csv.py \
-    --csv Plot_Clean/data/all_runs_flat.csv
+python plots/scripts/plot_calibration_comparison.py
+python plots/scripts/plot_subjects_vs_minutes.py
 ```
 
-**Figure 2** (win rate analysis):
+**Task Analysis**:
 ```bash
-python Plot_Clean/fig2_win_rate.py \
-    --csv Plot_Clean/data/all_runs_flat.csv
+python plots/scripts/plot_task_granularity_combined.py
+python plots/scripts/plot_dataset_composition.py
 ```
 
-**Figure 3** (stage gains):
+**Deployment Visualization**:
 ```bash
-python Plot_Clean/fig3_stage_gains.py \
-    --csv Plot_Clean/data/all_runs_flat.csv
+python plots/scripts/deployment/create_deployment_visualization.py
+python plots/scripts/deployment/create_improved_deployment_plots.py
 ```
 
 #### Legacy Plot Generation (requires WandB API access)
@@ -210,9 +209,19 @@ model.load_state_dict(torch.load('saved_models/pretrained/pretrained_weights.pth
 - `deploy_prod/`: Production deployment code and models  
 - `saved_models/`: Consolidated model storage (pretrained/, finetuned/, production/)
 - `data/datasets/final_dataset/`: EEG datasets (not tracked in git)
-- `Plot/`: Legacy research plotting scripts (requires WandB API)
-- `Plot_Clean/`: Publication-ready plots (uses CSV data)
+- `analysis/`: All analysis scripts organized by category
+  - `analysis/deployment/`: Deployment analysis
+  - `analysis/subjects/`: Subject-specific analysis
+  - `analysis/experiments/`: Experiment-level analysis
+  - `analysis/results/`: All CSV analysis results
+- `plots/`: All plotting functionality
+  - `plots/scripts/`: Plotting scripts organized by type
+  - `plots/figures/`: Generated figures (PDF/PNG)
+  - `plots/data/`: Plot data files
+  - `plots/style/`: Figure styling configuration
 - `docs/`: Documentation including quick start guide and memory management
+- `tools/`: Utility scripts
+- `temp/`: Temporary files and screenshots
 
 ## Development Environment
 The codebase uses PyTorch with the following key dependencies:

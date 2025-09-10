@@ -130,7 +130,6 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
         ]
     )
 
-    # TEST TO DELETE:
     params.num_of_classes = trial.suggest_categorical("num_of_classes", [4, 5])
     params.label_mapping_version = trial.suggest_categorical("label_mapping_version", ["v0", "v1"])
     params.use_amp = trial.suggest_categorical("use_amp", [True, False])
