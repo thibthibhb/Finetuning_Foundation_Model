@@ -111,6 +111,8 @@ analysis/results/*.csv
 # Ignore plots data directories (large CSV files)
 plots/data/
 plots/data_full/
+# Ignore experiment results
+experiments/results/
 
 # Database files
 *.sqlite
