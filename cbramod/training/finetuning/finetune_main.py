@@ -27,10 +27,8 @@ except ImportError:
     from icl_data import make_episodic_loaders
     from icl_trainer import ICLTrainer
 from cbramod.models import model_for_idun
-import pdb
 from statistics import mean, stdev
 from torch.utils.data import DataLoader
-import torch
 try:
     from .finetune_tuner import run_optuna_tuning
 except ImportError:
@@ -102,7 +100,6 @@ def main(return_params=False):
 
     # Data-related info
     parser.add_argument('--num_subjects_train', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
-    #parser.add_argument('--num_nights_train', type=int, default=-1, help='(auto-filled if -1) Number of unique subjects in the dataset')
 
     # Experiment tracking
     parser.add_argument('--baseline', action='store_true', help='Is this a non-foundation baseline model?')
@@ -187,20 +184,6 @@ def main(return_params=False):
     parser.add_argument('--preprocess', action='store_true', default=False,
                         help='If set, apply extra EEG preprocessing (notch harmonics, SG smoothing, etc.)')
     
-    # === Noise Injection for Robustness Analysis ===
-    parser.add_argument('--noise_level', type=float, default=0.0, 
-                        help='Noise injection level (0.0=no noise, 0.05=5pct, 0.10=10pct, 0.20=20pct)')
-    parser.add_argument('--noise_type', type=str, default='realistic', 
-                        choices=['gaussian', 'emg', 'movement', 'electrode', 'realistic'],
-                        help='Type of noise to inject: gaussian, emg (muscle), movement, electrode (impedance), realistic (mixed)')
-    parser.add_argument('--noise_seed', type=int, default=42, 
-                        help='Random seed for noise injection (for reproducible experiments)')
-    
-    # === Robustness Study Parameters ===
-    parser.add_argument('--robustness_study', action='store_true',
-                        help='Run systematic robustness study across multiple noise conditions')
-    parser.add_argument('--robustness_trials', type=int, default=50,
-                        help='Number of trials for robustness study (when --robustness_study is enabled)')
     
     # === In-Context Learning (ICL) Parameters ===
     parser.add_argument('--icl_mode', type=str, default='off', choices=['off', 'proto', 'meta_proto'],
@@ -255,10 +238,8 @@ def main(return_params=False):
     
     # Automatically compute number of datasets (skip if tuning - handled in objective function)
     if not params.tune:
-        print(f"🐛 DEBUG: Raw datasets param: {repr(params.datasets)}")
         params.dataset_names = [name.strip() for name in params.datasets.split(',')]
         params.num_datasets = len(params.dataset_names)
-        print(f"🐛 DEBUG: Split dataset_names: {params.dataset_names} (count: {params.num_datasets})")
 
     # ✅ Load class weights if provided
     if params.weight_class is not None and os.path.exists(params.weight_class + ".npy"):
@@ -285,14 +266,11 @@ def main(return_params=False):
 
         # Load once with label mapping version
         dataset = idun_datasets.MemoryEfficientKFoldDataset(
-            seqs_labels_path_pair, 
+            seqs_labels_path_pair,
             num_of_classes=params.num_of_classes,
             label_mapping_version=getattr(params, 'label_mapping_version', 'v1'),
             do_preprocess=getattr(params, 'preprocess', False),
-            sfreq=getattr(params, 'sample_rate', 200.0),
-            noise_level=getattr(params, 'noise_level', 0.0),
-            noise_type=getattr(params, 'noise_type', 'realistic'),
-            noise_seed=getattr(params, 'noise_seed', 42)
+            sfreq=getattr(params, 'sample_rate', 200.0)
         )
 
         # Use single subject-level split
@@ -302,8 +280,6 @@ def main(return_params=False):
         
         if params.num_subjects_train < 0:      # leave CLI override untouched
             params.num_subjects_train = dataset.num_subjects_train
-        # if params.num_nights_train < 0:
-        #     params.num_nights_train   = dataset.num_nights_train
             
         train_set = torch.utils.data.Subset(dataset, train_idx)
         val_set = torch.utils.data.Subset(dataset, val_idx)

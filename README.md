@@ -14,9 +14,7 @@ _A Criss-Cross Brain Foundation Model for EEG Decoding_
 </div>
 
 
-<div align="center">
-<img src="figure/CBraMod_logo.png" style="width: 15%;" />
-</div>
+<!-- Logo image: figure/CBraMod_logo.png (not included in repository) -->
 
 
 <p align="center">
@@ -35,9 +33,7 @@ _A Criss-Cross Brain Foundation Model for EEG Decoding_
 We propose **CBraMod**, a novel EEG foundation model, for EEG decoding on various clinical and BCI application.
 The preprint version of our paper is available at [arXiv](https://arxiv.org/abs/2412.07236). 
 The camera-ready version of the paper will be available at [OpenReview](https://openreview.net/forum?id=NPNUHgHF2w).
-<div align="center">
-<img src="figure/model.png" style="width:100%;" />
-</div>
+<!-- Model architecture diagram: figure/model.png (not included in repository) -->
 
 
 
@@ -71,8 +67,8 @@ python cbramod/training/finetuning/finetune_main.py \
 
 ### 🎓 Available Training Methods
 - **Standard Fine-tuning**: End-to-end supervised learning
-- **Two-Phase Training**: Progressive unfreezing for stable adaptation  
-- **In-Context Learning (ICL)**: Few-shot learning without training
+- **Two-Phase Training**: Progressive unfreezing (add `--two_phase_training True --phase1_epochs 3`)
+- **In-Context Learning (ICL)**: Few-shot learning (`--icl_mode proto --icl_k 16` or `--icl_mode meta_proto`)
 - **Hyperparameter Optimization**: Automated search with Optuna
 - **Robustness Analysis**: Training with realistic EEG artifacts
 
@@ -91,7 +87,7 @@ You can fine-tune the pretrained CBraMod on your custom downstream dataset using
 ```python
 import torch
 import torch.nn as nn
-from models.cbramod import CBraMod
+from cbramod.models.cbramod import CBraMod
 from einops.layers.torch import Rearrange
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -127,18 +123,20 @@ CBraMod achieves state-of-the-art performance on ear-EEG sleep staging:
 ### Generate Analysis Plots
 ```bash
 # Extract experimental data from W&B
-python Plot_Clean/load_and_structure_runs.py \
+python plots/scripts/load_and_structure_runs.py \
     --project CBraMod-earEEG-tuning \
-    --entity your-entity
+    --entity your-entity \
+    --output-dir plots/data/
 
-# Generate publication figures  
-python Plot_Clean/plot_calibration_comparison.py --csv Plot_Clean/data/all_runs_flat.csv
-python Plot_Clean/plot_subjects_vs_minutes.py --csv Plot_Clean/data/all_runs_flat.csv
-python Plot_Clean/plot_training_stage_gains.py --csv Plot_Clean/data/all_runs_flat.csv
-python Plot_Clean/plot_robustness_noise_paired.py --csv Plot_Clean/data/all_runs_flat.csv --test-subjects Plot_Clean/data/all_test_subjects_complete.csv
+# Generate publication figures
+python plots/scripts/plot_calibration_comparison.py
+python plots/scripts/plot_subjects_vs_minutes.py
+python plots/scripts/plot_training_stage_gains.py
+python plots/scripts/plot_dataset_composition.py --out plots/figures
+python plots/scripts/plot_hyperparameter_sensitivity.py
 ```
 
-**📈 Complete Analysis Guide**: See [`Plot_Clean/README.md`](Plot_Clean/README.md) for all visualization options
+**📈 Complete Analysis Guide**: See [`plots/README.md`](plots/README.md) for all visualization options
 
 ## 📁 Project Structure
 
@@ -156,8 +154,12 @@ CBraMod/
 │   ├── data/datasets/          # EEG datasets (OpenNeuro, ORP, IDUN_EEG)
 │   └── experiments/            # Experiment logs and configurations
 │
-├── 📈 Analysis & Deployment  
-│   ├── Plot_Clean/             # Publication-ready analysis and figures
+├── 📈 Analysis & Deployment
+│   ├── plots/                  # Publication-ready analysis and figures
+│   │   ├── scripts/            # Plotting and analysis scripts
+│   │   ├── figures/            # Generated figures (PDF/PNG)
+│   │   └── data/               # Plot data files
+│   ├── analysis/               # Analysis results and reports
 │   ├── scripts/                # Inference and utility scripts
 │   └── deploy_prod/            # Production deployment code
 │
@@ -169,9 +171,10 @@ CBraMod/
 
 ### Quick Navigation
 - **🚀 Start Training**: [`ReadMe_training.md`](ReadMe_training.md)
-- **💻 Development**: [`CLAUDE.md`](CLAUDE.md) 
-- **📊 Analysis**: [`Plot_Clean/README.md`](Plot_Clean/README.md)
+- **💻 Development**: [`CLAUDE.md`](CLAUDE.md)
+- **📊 Analysis**: [`plots/README.md`](plots/README.md)
 - **🏗️ Architecture**: [`cbramod/models/`](cbramod/models/)
+- **📁 Analysis Results**: [`analysis/README.md`](analysis/README.md)
 
 ## 🔗 Citation
 If you're using this repository in your research or applications, please cite using the following BibTeX:

@@ -11,42 +11,10 @@ import numpy as np
 from scipy.signal import iirnotch, filtfilt, savgol_filter
 # Optional: import pywt for wavelet denoising
 
-def preprocess_epoch(epoch, sfreq):
-    # 1) DC offset / baseline
-    #epoch = epoch - np.mean(epoch, axis=-1, keepdims=True)
+def preprocess_epoch(epoch_data, sfreq=200.0):
+    """Empty preprocessing function - returns input unchanged."""
+    return epoch_data
 
-    # # 2) Artifact removal - remove epochs with extreme amplitudes (likely artifacts)
-    # amplitude_thresh = np.percentile(np.abs(epoch), 99.5)  # 99.5th percentile threshold
-    # if np.max(np.abs(epoch)) > 5 * amplitude_thresh:
-    #     # Replace extreme values with median
-    #     epoch = np.clip(epoch, -3 * amplitude_thresh, 3 * amplitude_thresh)
-    
-    # # 3) Savitzky-Golay smoothing (window 11 samples, polyorder 2)
-    # epoch = savgol_filter(epoch, window_length=11, polyorder=2, axis=-1)
-    
-    # # 4) Z-score normalization per epoch (crucial for cross-subject consistency)
-    # epoch_std = np.std(epoch, axis=-1, keepdims=True)
-    # if epoch_std > 1e-6:  # Avoid division by zero
-    #     epoch = epoch / (epoch_std + 1e-8)
-    
-    # # 5) Robust scaling - clip extreme outliers after normalization
-    # epoch = np.clip(epoch, -4, 4)  # Remove values beyond ±4 standard deviations
-    
-    # 6) (Optional) Linear detrend - ENABLED for better baseline stability
-    # t = np.arange(epoch.shape[-1])
-    # coeffs = np.polyfit(t, epoch.flatten() if epoch.ndim == 1 else epoch.squeeze(), 1)
-    # trend = np.polyval(coeffs, t)
-    # epoch = epoch - trend.reshape(epoch.shape)
-    
-    # 7) (Optional) Wavelet denoising - ENABLED for noise reduction
-    # coeffs = pywt.wavedec(epoch, 'db4', level=3, axis=-1)
-    # thresh = np.median(np.abs(coeffs[-1])) / 0.6745
-    # denoised = [pywt.threshold(c, thresh, mode='soft') for c in coeffs]
-    # epoch = pywt.waverec(denoised, 'db4', axis=-1)
-    
-    return epoch
-            
-    
 class MemoryEfficientKFoldDataset(Dataset):
     def __init__(self, seqs_labels_path_pair, num_of_classes=5, do_preprocess: bool = False, sfreq: float = 200.0, label_mapping_version='v1', 
                  noise_level: float = 0.0, noise_type: str = 'realistic', noise_seed: int = 42):
@@ -277,38 +245,6 @@ def get_custom_split(dataset, n_splits=3, seed=42, orp_train_frac=0.6):
     )
     yield 0, train_indices, val_indices, test_indices
 
-
-# def get_custom_split(dataset, seed=42, train_frac=0.7, val_frac=0.15, orp_train_frac=0.6):
-#     import numpy as np
-
-#     metadata = dataset.get_metadata()
-#     all_indices = list(range(len(metadata)))
-
-#     rng = np.random.default_rng(seed)
-#     rng.shuffle(all_indices)
-
-#     n_total = len(all_indices)
-#     n_train = int(train_frac * n_total)
-#     n_val = int(val_frac * n_total)
-#     n_test = n_total - n_train - n_val
-
-#     train_indices = all_indices[:n_train]
-#     val_indices = all_indices[n_train:n_train + n_val]
-#     test_indices = all_indices[n_train + n_val:]
-
-#     train_subjects = {metadata[i]["subject"] for i in train_indices}
-#     num_subjects_train = len(train_subjects)
-#     dataset.num_subjects_train = num_subjects_train
-
-#     print(
-#         f"\n✅ Unified dataset split:"
-#         f" {len(train_indices)} train"
-#         f" ({num_subjects_train} subjects),"
-#         f" {len(val_indices)} val,"
-#         f" {len(test_indices)} test"
-#     )
-
-#     yield 0, train_indices, val_indices, test_indices
 
 
 class LoadDataset:

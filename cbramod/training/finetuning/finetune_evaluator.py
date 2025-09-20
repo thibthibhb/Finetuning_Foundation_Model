@@ -6,11 +6,6 @@ from tqdm import tqdm
 # CLAUDE-ENHANCEMENT: Unified AMP import for consistency
 from torch import amp
 
-# CLAUDE-COMMENTED-OUT: Old AMP import with try/except
-# try:
-#     from torch.amp import autocast  # PyTorch >= 1.10
-# except ImportError:
-#     from torch.cuda.amp import autocast  # PyTorch < 1.10
 
 
 class Evaluator:
@@ -44,12 +39,6 @@ class Evaluator:
             with amp.autocast('cuda', enabled=self.use_amp):
                 pred = model(x)
                 
-            # CLAUDE-COMMENTED-OUT: Old AMP usage
-            # if self.use_amp:
-            #     with autocast('cuda'):
-            #         pred = model(x)
-            # else:
-            #     pred = model(x)
             pred_y = torch.max(pred, dim=-1)[1]
 
             y_np = y.cpu().squeeze().numpy()

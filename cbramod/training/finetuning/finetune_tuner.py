@@ -5,7 +5,6 @@ import copy
 import argparse
 import json
 from statistics import mean, stdev
-import matplotlib.pyplot as plt
 import numpy as np
 
 # Add the root directory to the Python path
@@ -35,14 +34,11 @@ def run_multi_eval(params, subjects):
         dataset_loader = idun_datasets.LoadDataset(config)
         seqs_labels_path_pair = dataset_loader.get_all_pairs()
         dataset = idun_datasets.MemoryEfficientKFoldDataset(
-            seqs_labels_path_pair, 
+            seqs_labels_path_pair,
             num_of_classes=config.num_of_classes,
             label_mapping_version=getattr(config, 'label_mapping_version', 'v1'),
             do_preprocess=getattr(config, 'preprocess', False),
-            sfreq=getattr(config, 'sample_rate', 200.0),
-            noise_level=getattr(config, 'noise_level', 0.0),
-            noise_type=getattr(config, 'noise_type', 'realistic'),
-            noise_seed=getattr(config, 'noise_seed', 42)
+            sfreq=getattr(config, 'sample_rate', 200.0)
         )
 
         fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=42, orp_train_frac=config.data_ORP))
@@ -101,12 +97,9 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
         "ORP,2017_Open_N", 
         "ORP,2023_Open_N,2019_Open_N,2017_Open_N"
     ])
-    print(f"🐛 DEBUG: Optuna selected datasets: {repr(params.datasets)}")
-    
     # Process datasets after Optuna selection (this should happen here, not in main)
     params.dataset_names = [name.strip() for name in params.datasets.split(',')]
     params.num_datasets = len(params.dataset_names)
-    print(f"🐛 DEBUG: Updated dataset_names: {params.dataset_names} (count: {params.num_datasets})")
     if params.use_focal_loss:
         params.focal_gamma = trial.suggest_float("focal_gamma", 1.0, 3.0, step=0.5)
     else:
@@ -135,62 +128,20 @@ def objective(trial, base_params, multi_eval=False, multi_eval_subjects=None):
     params.use_amp = trial.suggest_categorical("use_amp", [True, False])
     params.epochs = trial.suggest_int("epochs", 50, 200)
     params.use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
-    # params.icl_mode = trial.suggest_categorical("icl_mode", ["none"]) #"none", "proto", cnp", "set COMMENTED OUT
-    # if params.icl_mode != "none":
-    #     params.k_support = trial.suggest_int("k_support", 1, 20)
-    #     params.proto_temp = trial.suggest_float("proto_temp", 0.01, 1.0, log=True)
-    #     params.icl_hidden = trial.suggest_categorical("icl_hidden", [128, 256, 512])
-    #     params.icl_layers = trial.suggest_int("icl_layers", 1, 4)
-
-    # params.use_metric_friendly_training = trial.suggest_categorical("use_metric_friendly_training", [True, False])
-    # if params.use_metric_friendly_training:
-    #     params.contrastive_weight = trial.suggest_float("contrastive_weight", 0.01, 0.5)
-    #     params.prototypical_weight = trial.suggest_float("prototypical_weight", 0.01, 0.5)
-
-    # params.use_temporal_smoothing = trial.suggest_categorical("use_temporal_smoothing", [True, False])
-    # if params.use_temporal_smoothing:
-    #     params.temporal_smoothing_window = trial.suggest_int("temporal_smoothing_window", 3, 7)
 
     params.preprocess = trial.suggest_categorical("preprocess", [True, False])
 
-    # === Noise Injection for Robustness Analysis ===
-    # Enable comprehensive noise injection parameter sweeps
-    params.noise_level = trial.suggest_categorical("noise_level", [
-        # 0.0,    # Clean baseline
-        # 0.05,   # 5% noise (light)
-        # 0.10,   # 10% noise (moderate) 
-        0.15,   # 15% noise (heavy)
-        0.20    # 20% noise (very heavy)
-    ])
-    
-    # Only suggest noise type if noise is enabled
-    if params.noise_level > 0.0:
-        params.noise_type = trial.suggest_categorical("noise_type", [
-            "realistic",    # Mixed artifacts (RECOMMENDED)
-            "emg",         # Muscle artifacts only
-            "movement",    # Motion artifacts only  
-            "electrode",   # Contact artifacts only
-            "gaussian"     # Simple white noise baseline
-        ])
-        # Fixed noise seed for reproducible robustness comparisons
-        params.noise_seed = 42
-    else:
-        params.noise_type = "realistic"  # Default (unused when noise_level=0.0)
-        params.noise_seed = 42
 
     params.frozen = trial.suggest_categorical("frozen", [True, False])
     
     load_dataset = idun_datasets.LoadDataset(params)
     seqs_labels_path_pair = load_dataset.get_all_pairs()
     dataset = idun_datasets.MemoryEfficientKFoldDataset(
-        seqs_labels_path_pair, 
+        seqs_labels_path_pair,
         num_of_classes=params.num_of_classes,
         label_mapping_version=getattr(params, 'label_mapping_version', 'v1'),
         do_preprocess=getattr(params, 'preprocess', False),
-        sfreq=getattr(params, 'sample_rate', 200.0),
-        noise_level=getattr(params, 'noise_level', 0.0),
-        noise_type=getattr(params, 'noise_type', 'realistic'),
-        noise_seed=getattr(params, 'noise_seed', 42)
+        sfreq=getattr(params, 'sample_rate', 200.0)
     )
     seed = trial.suggest_int("split_seed", 0, 10000)
     fold, train_idx, val_idx, test_idx = next(idun_datasets.get_custom_split(dataset, seed=seed, orp_train_frac=params.data_ORP))
@@ -248,159 +199,16 @@ def run_optuna_tuning(params, multi_eval=False, multi_eval_subjects=None, n_tria
     for k, v in best_trial.params.items():
         print(f"  {k}: {v}")
 
-def run_robustness_study(base_params, n_trials=50, study_name="CBraMod-robustness-focused"):
-    """
-    Specialized robustness study focusing on systematic noise injection analysis.
-    
-    This study runs comprehensive robustness experiments across all noise types
-    and levels to generate data for robustness analysis plots.
-    """
-    
-    storage_url = f"sqlite:///experiments/optuna_studies/{study_name}.db"
-    
-    def robustness_objective(trial):
-        """
-        Objective function focused on robustness evaluation.
-        
-        Systematically explores noise injection space while keeping 
-        other hyperparameters more constrained.
-        """
-        # Copy base parameters
-        params = copy.deepcopy(base_params)
-        
-        # === FOCUSED: Noise injection parameters (systematic exploration) ===
-        params.noise_level = trial.suggest_categorical("noise_level", [
-            0.0, 0.05, 0.10, 0.15, 0.20, 0.25  # Extended range for robustness
-        ])
-        
-        if params.noise_level > 0.0:
-            params.noise_type = trial.suggest_categorical("noise_type", [
-                "realistic", "emg", "movement", "electrode", "gaussian"
-            ])
-        else:
-            params.noise_type = "realistic"
-        
-        params.noise_seed = 42  # Fixed for reproducibility
-        
-        # === CONSTRAINED: Other hyperparameters (focus on noise, not hyperopt) ===
-        # Keep architecture relatively fixed for fair robustness comparison
-        params.num_of_classes = trial.suggest_categorical("num_of_classes", [4, 5])
-        params.label_mapping_version = "v1"  # Use consistent mapping
-        
-        # Basic architecture choices (constrained)
-        params.embedding_dim = trial.suggest_categorical("embedding_dim", [256, 512])
-        params.layers = trial.suggest_categorical("layers", [8, 12])
-        params.heads = trial.suggest_categorical("heads", [4, 8])
-        
-        # Learning parameters (focused range)
-        params.lr = trial.suggest_float("lr", 1e-5, 5e-4, log=True)
-        params.batch_size = trial.suggest_categorical("batch_size", [32, 64])
-        params.epochs = trial.suggest_int("epochs", 30, 80)  # Shorter for more trials
-        
-        # Training strategy
-        params.two_phase_training = trial.suggest_categorical("two_phase_training", [True, False])
-        if params.two_phase_training:
-            params.phase1_epochs = trial.suggest_int("phase1_epochs", 2, 5)
-            head_mult = trial.suggest_float("head_lr_mult", 1.0, 3.0)
-            lr_ratio = trial.suggest_float("lr_ratio", 5, 15)
-            params.head_lr = params.lr * head_mult
-            params.backbone_lr = params.head_lr / lr_ratio
-        
-        # Loss function choices
-        params.use_focal_loss = trial.suggest_categorical("use_focal_loss", [True, False])
-        if params.use_focal_loss:
-            params.focal_gamma = trial.suggest_float("focal_gamma", 1.0, 3.0)
-        
-        params.use_class_weights = trial.suggest_categorical("use_class_weights", [True, False])
-        
-        # Dataset choices (focused on robustness comparison)
-        params.datasets = trial.suggest_categorical("datasets", [
-            "ORP", "ORP,2023_Open_N"  # Keep dataset simpler for robustness focus
-        ])
-        params.dataset_names = [name.strip() for name in params.datasets.split(',')]
-        params.num_datasets = len(params.dataset_names)
-        
-        params.data_ORP = trial.suggest_float("data_ORP", 0.5, 0.6, step=0.1)
-        params.preprocess = trial.suggest_categorical("preprocess", [True, False])
-        params.frozen = False  # Always fine-tune for robustness evaluation
-        
-        # Fixed configurations for consistency
-        params.foundation_dir = "./saved_models/pretrained/pretrained_weights.pth"
-        params.use_amp = True  # Enable for efficiency
-        
-        # Create experiment identifier for robustness tracking
-        noise_desc = f"clean" if params.noise_level == 0.0 else f"{params.noise_type}_{int(params.noise_level*100)}pct"
-        params.run_name = f"robust_{noise_desc}_t{trial.number}"
-        
-        # Use the existing objective function
-        return objective(trial, params)
-    
-    # Create study directory
-    os.makedirs("experiments/optuna_studies", exist_ok=True)
-    
-    # Create and run study
-    study = optuna.create_study(
-        direction="maximize", 
-        study_name=study_name, 
-        storage=storage_url,
-        load_if_exists=True,
-        pruner=optuna.pruners.MedianPruner(n_warmup_steps=0)
-    )
-    
-    print(f"🎯 Starting ROBUSTNESS-FOCUSED study: {study_name}")
-    print(f"   Target: {n_trials} trials focused on noise injection analysis")
-    print(f"   Storage: {storage_url}")
-    print(f"   Noise levels: 0%, 5%, 10%, 15%, 20%, 25%")
-    print(f"   Noise types: realistic, emg, movement, electrode, gaussian")
-    
-    study.optimize(robustness_objective, n_trials=n_trials)
-    
-    # Print robustness analysis summary
-    completed_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
-    
-    if completed_trials:
-        print(f"\n🔊 ROBUSTNESS ANALYSIS SUMMARY ({len(completed_trials)} completed trials)")
-        print("=" * 70)
-        
-        # Group by noise characteristics
-        noise_groups = {}
-        for trial in completed_trials:
-            noise_level = trial.params.get('noise_level', 0.0)
-            noise_type = trial.params.get('noise_type', 'clean')
-            key = f"{noise_type}_{noise_level:.2f}"
-            
-            if key not in noise_groups:
-                noise_groups[key] = []
-            noise_groups[key].append(trial.value)
-        
-        # Print summary by noise type
-        for noise_key in sorted(noise_groups.keys()):
-            values = noise_groups[noise_key]
-            avg_performance = np.mean(values)
-            std_performance = np.std(values)
-            print(f"  {noise_key:>20}: {avg_performance:.4f} ± {std_performance:.4f} (n={len(values)})")
-        
-        print(f"\n💾 Results saved to: {storage_url}")
-        print("   Use Plot_Clean/load_and_structure_runs.py to extract results for plotting")
-    
-    return study
 
 if __name__ == "__main__":
     from finetune_main import main
     parser = argparse.ArgumentParser()
     parser.add_argument('--multi_eval', action='store_true', help='Enable multi-subject evaluation for high-performing trials')
     parser.add_argument('--multi_eval_subjects', nargs='+', type=str, default=[], help='List of subjects for multi-subject evaluation')
-    parser.add_argument('--robustness_study', action='store_true', help='Run robustness-focused study instead of general tuning')
-    parser.add_argument('--robustness_trials', type=int, default=50, help='Number of trials for robustness study')
     parser.add_argument('--n_trials', type=int, default=20, help='Number of Optuna trials for general tuning')
     args, _ = parser.parse_known_args()
 
     params = main(return_params=True)
     
-    if args.robustness_study:
-        print("🎯 Running ROBUSTNESS-FOCUSED study with noise injection")
-        study_name = f"CBraMod-robustness-focused-{params.num_of_classes}class"
-        run_robustness_study(params, n_trials=args.robustness_trials, study_name=study_name)
-    else:
-        print("🔍 Running GENERAL hyperparameter tuning study") 
-        run_optuna_tuning(params, multi_eval=args.multi_eval, multi_eval_subjects=args.multi_eval_subjects, n_trials=args.n_trials)
+    print("🔍 Running GENERAL hyperparameter tuning study")
+    run_optuna_tuning(params, multi_eval=args.multi_eval, multi_eval_subjects=args.multi_eval_subjects, n_trials=args.n_trials)

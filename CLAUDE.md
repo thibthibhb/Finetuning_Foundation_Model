@@ -82,64 +82,38 @@ python cbramod/training/finetuning/finetune_main.py \
 #### Inference
 **Prerequisites**: Trained model must exist in saved_models/
 ```bash
-python scripts/inference/Inference_local.py
+python deploy_prod/code/inference.py
 ```
 
 ### Research and Plotting
 
-#### CRITICAL: Plot Data Generation Workflow
-**Step 1**: Generate structured data from WandB (REQUIRED FIRST):
+#### In-Context Learning (ICL)
+**ICL-Proto (no training, fast):**
 ```bash
-python plots/scripts/load_and_structure_runs.py \
-    --project CBraMod-earEEG-tuning \
-    --entity thibaut_hasle-epfl \
-    --output-dir plots/data/
-```
-This creates the CSV files needed for all subsequent plots.
-
-**Step 2**: Verify data was created:
-```bash
-ls plots/data/  # Should show: all_runs_flat.csv, cohort_4_class_flat.csv, etc.
+python cbramod/training/finetuning/finetune_main.py \
+    --icl_mode proto --icl_k 16 --icl_m 64 \
+    --downstream_dataset IDUN_EEG \
+    --datasets_dir data/datasets/final_dataset \
+    --datasets ORP --no_wandb
 ```
 
-#### Individual Plot Generation
-**Hyperparameter Analysis**:
+**Meta-ICL (with training):**
 ```bash
-python plots/scripts/plot_hyperparameter_sensitivity.py
-python plots/scripts/plot_heads_vs_weights_comparison.py
+python cbramod/training/finetuning/finetune_main.py \
+    --icl_mode meta_proto --icl_k 16 --icl_m 64 \
+    --epochs 20 --head_lr 1e-3 \
+    --downstream_dataset IDUN_EEG \
+    --datasets_dir data/datasets/final_dataset \
+    --datasets ORP --no_wandb
 ```
 
-**Performance Analysis**:
+**Complete ICL Research Protocol:**
 ```bash
-python plots/scripts/plot_calibration_comparison.py
-python plots/scripts/plot_subjects_vs_minutes.py
-```
-
-**Task Analysis**:
-```bash
-python plots/scripts/plot_task_granularity_combined.py
-python plots/scripts/plot_dataset_composition.py
-```
-
-**Deployment Visualization**:
-```bash
-python plots/scripts/deployment/create_deployment_visualization.py
-python plots/scripts/deployment/create_improved_deployment_plots.py
-```
-
-#### Legacy Plot Generation (requires WandB API access)
-**Comprehensive research plots**:
-```bash
-python Plot/research_plots.py
-```
-
-**All plots with options**:
-```bash
-python Plot/generate_all_plots.py \
-    --plots all \
-    --output-dir ./experiments/results/figures/ \
-    --entity thibaut_hasle-epfl \
-    --project CBraMod-earEEG-tuning
+python cbramod/training/icl_main.py \
+    --mode full \
+    --optuna_n_trials 30 \
+    --enable_feature_cache \
+    --wandb_project CBraMod-ICL-Research
 ```
 
 ## High-Level Architecture
@@ -153,24 +127,34 @@ The repository implements **CBraMod** (Criss-Cross Brain Foundation Model), an E
 - `cbramod/models/model_for_idun.py`: Task-specific model adaptations
 
 ### Training Pipeline
-**Two-Phase Training Strategy:**
-1. **Phase 1**: Train classification head with frozen backbone transformer
-2. **Phase 2**: Unfreeze backbone and continue training with lower learning rate
+**Available Training Methods:**
+- **Standard Fine-tuning**: End-to-end supervised learning
+- **Two-Phase Training**: Progressive unfreezing (add `--two_phase_training True --phase1_epochs 3`)
+- **In-Context Learning (ICL)**: Few-shot learning (`--icl_mode proto` or `--icl_mode meta_proto`)
+- **Hyperparameter Optimization**: Automated search with Optuna
 
 **Training Components:**
 - `cbramod/training/finetuning/finetune_trainer.py`: Core training logic
 - `cbramod/training/finetuning/finetune_tuner.py`: Hyperparameter optimization with Optuna
 - `cbramod/training/finetuning/finetune_evaluator.py`: Model evaluation and metrics
+- `cbramod/training/icl_main.py`: Comprehensive ICL evaluation script
+- `cbramod/training/icl_trainer.py`: ICL trainer with Proto/Meta modes
+- `cbramod/training/icl_data.py`: Episodic dataset for ICL
 
 ### Dataset Loading
 - `cbramod/load_datasets/idun_datasets.py`: IDUN sleep staging dataset
-- `cbramod/load_datasets/enhanced_dataset.py`: Enhanced dataset with quality checks
 - `cbramod/preprocessing/`: EEG signal preprocessing for OpenNeuro datasets
+  - `process_openneuro_2017.py`: Process 2017 OpenNeuro dataset
+  - `process_openneuro_2019.py`: Process 2019 OpenNeuro dataset
+  - `process_openneuro_2023.py`: Process 2023 OpenNeuro dataset
+  - `preprocess_idun.py`: IDUN dataset preprocessing
 
 ### Utilities
 - `cbramod/utils/signaltools.py`: EEG signal processing utilities
 - `cbramod/utils/memory_manager.py`: Memory management for large datasets
 - `cbramod/utils/comprehensive_logging.py`: Logging infrastructure
+- `cbramod/utils/noise_injection.py`: Data augmentation utilities
+- `cbramod/utils/util.py`: General utility functions
 
 ## Key Files and Configuration
 
@@ -197,31 +181,23 @@ model.load_state_dict(torch.load('saved_models/pretrained/pretrained_weights.pth
 
 ### Experiment Tracking
 - **Weights & Biases**: Integrated for experiment tracking - requires WandB login
-- **Optuna**: Hyperparameter optimization studies stored in `experiments/optuna_studies/`
-- **Reproducibility**: Full experiment configs saved in `experiments/configs/`
+- **WandB Logs**: Experiment data stored in `wandb/` (254+ experiment runs)
+- **Optuna**: Hyperparameter optimization available via `finetune_tuner.py`
 
 ## Project Structure Notes
-- `experiments/`: Training artifacts, logs, and results
-  - `experiments/configs/`: Reproducibility configurations
-  - `experiments/logs/`: Training and error logs
-  - `experiments/results/`: Analysis results and figures
-  - `experiments/wandb/`: WandB run data
-- `deploy_prod/`: Production deployment code and models  
-- `saved_models/`: Consolidated model storage (pretrained/, finetuned/, production/)
+- `cbramod/`: Main CBraMod module
+  - `cbramod/models/`: Model architectures (CBraMod, transformers)
+  - `cbramod/training/`: All training methods (finetuning, ICL, pretraining)
+  - `cbramod/load_datasets/`: Dataset loaders (IDUN_EEG, OpenNeuro)
+  - `cbramod/preprocessing/`: EEG signal preprocessing
+  - `cbramod/utils/`: Utilities (signal processing, memory management)
+- `deploy_prod/`: Production deployment code and models
+  - `deploy_prod/code/`: Deployment scripts including `inference.py`
+- `saved_models/`: Model storage
+  - `saved_models/pretrained/`: Pretrained weights and models
 - `data/datasets/final_dataset/`: EEG datasets (not tracked in git)
-- `analysis/`: All analysis scripts organized by category
-  - `analysis/deployment/`: Deployment analysis
-  - `analysis/subjects/`: Subject-specific analysis
-  - `analysis/experiments/`: Experiment-level analysis
-  - `analysis/results/`: All CSV analysis results
-- `plots/`: All plotting functionality
-  - `plots/scripts/`: Plotting scripts organized by type
-  - `plots/figures/`: Generated figures (PDF/PNG)
-  - `plots/data/`: Plot data files
-  - `plots/style/`: Figure styling configuration
-- `docs/`: Documentation including quick start guide and memory management
-- `tools/`: Utility scripts
-- `temp/`: Temporary files and screenshots
+  - Contains: 2017_Open_N, 2019_Open_N, 2023_Open_N, ORP, ORP_improved
+- `Extra/`: Additional utilities and experimental scripts
 
 ## Development Environment
 The codebase uses PyTorch with the following key dependencies:
@@ -246,13 +222,39 @@ The codebase uses PyTorch with the following key dependencies:
 - **CUDA out of memory**: Reduce batch size or enable mixed precision training
 - **WandB login required**: Run `wandb login` before training with experiment tracking
 
-#### Plot Generation Issues
-- **Missing CSV files**: Must run `load_and_structure_runs.py` first to generate data
-- **WandB API errors**: Ensure correct project name and entity in plot commands
-- **Empty plots**: Verify CSV files contain data after WandB data extraction
+#### ICL Issues
+- **Missing datasets error**: Ensure `data/datasets/final_dataset/` contains required dataset folders
+- **ICL configuration errors**: Use correct K values (2, 4, 8, 16, 32) and modes (proto, meta_proto)
+- **Feature cache issues**: Enable `--enable_feature_cache` for faster repeated runs
 
 ### Development Notes
-- **Two-phase training** is the recommended approach for CBraMod fine-tuning
-- **Mixed precision training** available via PyTorch's automatic mixed precision
-- **Gradient clipping** enabled by default to prevent training instability
-- **Memory management** utilities available in `cbramod/utils/memory_manager.py`
+- **Two-phase training** is the recommended and proven approach for CBraMod fine-tuning
+- **Memory management** system implemented in `cbramod/utils/memory_manager.py`
+  - Automated cleanup between trials
+  - Intelligent checkpoint management (max 5 files by default)
+  - Memory leak detection and monitoring
+  - GPU cache management utilities
+- **Training stability** improvements with comprehensive logging and error handling
+- **Current codebase status**: All core functionality verified and operational
+- **Inference deployment**: Production-ready inference available in `deploy_prod/code/`
+
+## Current System Status (Updated)
+
+### ✅ Verified Working Components
+- **Training pipelines**: Pretraining, fine-tuning, and ICL scripts operational
+- **Memory management**: Automated cleanup and monitoring implemented
+- **ICL framework**: Proto and Meta-ICL with comprehensive evaluation
+- **Model storage**: Pretrained and fine-tuned model checkpoints well-organized
+- **Dataset access**: EEG datasets properly structured and accessible
+- **WandB integration**: Experiment tracking for all training methods
+
+### 📊 Current Data Status
+- **Pretrained models**: Available in `saved_models/pretrained/`
+- **Production models**: Deployment-ready files in `deploy_prod/`
+- **Dataset completeness**: All required datasets (2017-2023 OpenNeuro, ORP) present
+- **ICL capabilities**: Full Proto/Meta-ICL evaluation with Bayesian optimization
+
+### 🔧 Maintenance Recommendations
+- Regular cleanup of WandB runs and experiment logs
+- Monitor checkpoint accumulation in `saved_models/`
+- Archive experimental data if disk space becomes constrained
